@@ -9,8 +9,10 @@ different frames - exactly the over-counting problem the engine solves.
 
 from __future__ import annotations
 
+import csv
 import math
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 
 import numpy as np
 
@@ -249,3 +251,92 @@ def simulate_survey(cfg: SimulationConfig) -> Dataset:
     config_dict = asdict(cfg)
     config_dict["species"] = list(cfg.species)
     return Dataset(frames=frames, ground_truth=ground_truth, metadata={"simulation": config_dict})
+
+
+def _srt_time(seconds: float) -> str:
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def export_raw_logs(
+    dataset: Dataset,
+    out_dir: str | Path,
+    include_gimbal_yaw: bool = True,
+    frame_interval_s: float = 2.0,
+    body_size_m: tuple[float, float] = (2.2, 1.1),
+) -> dict[str, Path]:
+    """Write a simulated survey as the raw files a pilot would bring home.
+
+    * ``flight.SRT`` - DJI-style subtitle telemetry, one block per capture
+    * ``telemetry.csv`` - per-photo metadata (image name, position, gimbal)
+    * ``detections.csv`` - AI bounding boxes keyed by image name *and* frame number
+    * ``ground_truth.csv`` - true animal positions, for checking results
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "srt": out / "flight.SRT",
+        "telemetry": out / "telemetry.csv",
+        "detections": out / "detections.csv",
+        "ground_truth": out / "ground_truth.csv",
+    }
+
+    blocks = []
+    with paths["telemetry"].open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        header = ["image", "latitude", "longitude", "relative_altitude"]
+        if include_gimbal_yaw:
+            header.append("gimbal_yaw")
+        header += ["gimbal_pitch", "gimbal_roll"]
+        writer.writerow(header)
+        for i, f in enumerate(dataset.frames):
+            p = f.pose
+            yaw = ((p.heading_deg + 180.0) % 360.0) - 180.0  # DJI reports -180..180
+            row = [f"{f.frame_id}.JPG", f"{p.latitude:.8f}", f"{p.longitude:.8f}", f"{p.altitude_agl_m:.2f}"]
+            if include_gimbal_yaw:
+                row.append(f"{yaw:.2f}")
+            row += [f"{p.gimbal_pitch_deg:.2f}", f"{p.gimbal_roll_deg:.2f}"]
+            writer.writerow(row)
+
+            t0, t1 = i * frame_interval_s, (i + 1) * frame_interval_s
+            gimbal = f" [gb_yaw: {yaw:.1f} gb_pitch: {p.gimbal_pitch_deg:.1f} gb_roll: {p.gimbal_roll_deg:.1f}]"
+            blocks.append(
+                f"{i + 1}\n{_srt_time(t0)} --> {_srt_time(t1)}\n"
+                f'<font size="28">FrameCnt: {i + 1}, DiffTime: {int(frame_interval_s * 1000)}ms\n'
+                f"2024-06-01 09:{(i * 2) // 60 % 60:02d}:{(i * 2) % 60:02d}.000\n"
+                f"[iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [focal_len: 24.00] "
+                f"[latitude: {p.latitude:.6f}] [longitude: {p.longitude:.6f}] "
+                f"[rel_alt: {p.altitude_agl_m:.3f} abs_alt: {p.altitude_agl_m + 112.4:.3f}]"
+                f"{gimbal if include_gimbal_yaw else ''} </font>\n"
+            )
+    paths["srt"].write_text("\n".join(blocks), encoding="utf-8")
+
+    with paths["detections"].open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["image", "frame", "xmin", "ymin", "xmax", "ymax", "label", "confidence"])
+        for i, f in enumerate(dataset.frames):
+            gsd = f.pose.altitude_agl_m / f.camera.focal_px
+            half_w, half_h = body_size_m[0] / gsd / 2, body_size_m[1] / gsd / 2
+            for d in f.detections:
+                writer.writerow(
+                    [
+                        f"{f.frame_id}.JPG",
+                        i + 1,
+                        f"{d.x - half_w:.1f}",
+                        f"{d.y - half_h:.1f}",
+                        f"{d.x + half_w:.1f}",
+                        f"{d.y + half_h:.1f}",
+                        d.label,
+                        f"{d.confidence:.4f}",
+                    ]
+                )
+
+    with paths["ground_truth"].open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["truth_id", "label", "latitude", "longitude"])
+        for g in dataset.ground_truth or []:
+            writer.writerow([g["truth_id"], g["label"], f"{g['latitude']:.8f}", f"{g['longitude']:.8f}"])
+    return paths

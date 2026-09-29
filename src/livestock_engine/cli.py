@@ -3,6 +3,8 @@
     livestock-engine dedup INPUT -o animals.csv [--geojson ...] [--evaluate]
     livestock-engine simulate -o flight.json [--profile standard] [--seed 0]
     livestock-engine benchmark [--runs 20] [--threshold 0.99]
+    livestock-engine ingest --telemetry flight.SRT --detections boxes.csv -o dataset.json
+    livestock-engine process --telemetry flight.SRT --detections boxes.csv --report report.json
 """
 
 from __future__ import annotations
@@ -27,10 +29,13 @@ from .io import (
     write_frame_corrections_csv,
     write_geojson,
 )
+from .camera import CameraModel
+from .ingest import INGEST_ERRORS, IngestOptions, ingest_files
 from .metrics import evaluate
 from .pipeline import run_pipeline
 from .registration import RegistrationConfig
-from .simulate import PROFILES, profile_config, simulate_survey
+from .report import build_report
+from .simulate import PROFILES, export_raw_logs, profile_config, simulate_survey
 
 
 def _add_dedup_options(p: argparse.ArgumentParser) -> None:
@@ -119,6 +124,157 @@ def cmd_dedup(args) -> int:
     return 0
 
 
+def _add_ingest_options(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("raw inputs")
+    g.add_argument("--telemetry", action="append", default=[], help="DJI .SRT or telemetry CSV (repeatable)")
+    g.add_argument(
+        "--detections",
+        action="append",
+        default=[],
+        help="bounding-box log: CSV, JSON or YOLO .txt (repeatable)",
+    )
+    g.add_argument("--class-names", help="comma-separated class names for numeric YOLO class ids")
+    g = p.add_argument_group("camera")
+    g.add_argument("--image-width", type=int, default=4000, help="image width in pixels (default: 4000)")
+    g.add_argument("--image-height", type=int, default=3000, help="image height in pixels (default: 3000)")
+    g.add_argument("--fov", type=float, default=84.0, help="camera field of view in degrees (default: 84)")
+    g.add_argument(
+        "--fov-type",
+        choices=("diagonal", "horizontal", "vertical"),
+        default="diagonal",
+        help="which field of view --fov describes (default: diagonal)",
+    )
+    g = p.add_argument_group("flight defaults")
+    g.add_argument("--default-pitch", type=float, default=-90.0, help="gimbal pitch when not logged (default: -90)")
+    g.add_argument("--default-altitude", type=float, help="height above ground (m) when not logged")
+    g.add_argument("--fps", type=float, default=30.0, help="video frame rate for frame-number lookups (default: 30)")
+    g.add_argument(
+        "--bbox-anchor",
+        choices=("center", "bottom"),
+        default="center",
+        help="box point that touches the ground: centre (nadir) or bottom-centre (oblique)",
+    )
+    g.add_argument(
+        "--time-tolerance",
+        type=float,
+        default=0.5,
+        help="max seconds between a detection and the nearest telemetry sample (default: 0.5)",
+    )
+    g.add_argument("--no-derive-heading", action="store_true", help="do not derive missing headings from the GPS track")
+
+
+def _ingest(args):
+    if not args.telemetry or not args.detections:
+        raise UsageError("raw input needs at least one --telemetry and one --detections file")
+    opts = IngestOptions(
+        camera=CameraModel(args.image_width, args.image_height, args.fov, args.fov_type),
+        default_pitch_deg=args.default_pitch,
+        default_altitude_m=args.default_altitude,
+        video_fps=args.fps,
+        bbox_anchor=args.bbox_anchor,
+        time_tolerance_s=args.time_tolerance,
+        derive_heading=not args.no_derive_heading,
+    )
+    names = [n.strip() for n in args.class_names.split(",")] if args.class_names else None
+    return ingest_files(args.telemetry, args.detections, opts, names)
+
+
+def cmd_ingest(args) -> int:
+    dataset, report = _ingest(args)
+    save_dataset(dataset, args.output)
+    for w in report.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    print(
+        f"wrote {args.output}: {report.frames} frames, {report.detections_matched} of "
+        f"{report.detections_in} detections matched to telemetry"
+    )
+    return 0
+
+
+class _Progress:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.started = time.perf_counter()
+
+    def emit(self, event: str, **fields) -> None:
+        if not self.enabled:
+            return
+        payload = {"event": event, "elapsed_s": round(time.perf_counter() - self.started, 3), **fields}
+        print(json.dumps(payload), flush=True)
+
+
+def cmd_process(args) -> int:
+    progress = _Progress(args.progress)
+    progress.emit("progress", stage="ingest", percent=5, message="Reading flight files")
+    warnings: list[str] = []
+    if args.dataset:
+        if args.telemetry or args.detections:
+            raise UsageError("use either --dataset or raw --telemetry/--detections inputs, not both")
+        dataset = load_dataset(args.dataset)
+    else:
+        dataset, ingest_report = _ingest(args)
+        warnings.extend(ingest_report.warnings)
+        progress.emit(
+            "progress",
+            stage="ingest",
+            percent=30,
+            message=f"Matched {ingest_report.detections_matched} of {ingest_report.detections_in} detections "
+            f"to {ingest_report.frames} frames",
+        )
+    if not dataset.frames or dataset.n_detections == 0:
+        raise UsageError("no detections could be matched to telemetry; check the files and camera settings")
+
+    progress.emit("progress", stage="dedup", percent=40, message=f"Projecting {dataset.n_detections} detections")
+    result = run_pipeline(
+        dataset,
+        _dedup_config(args),
+        max_range_m=args.max_range,
+        registration=_registration_config(args),
+    )
+    progress.emit("progress", stage="report", percent=85, message=f"Found {result.dedup.n_unique} unique animals")
+
+    rejected = len(result.projection.rejected_detection_ids)
+    if rejected:
+        warnings.append(f"{rejected} detections did not intersect the ground and were ignored")
+    report = build_report(dataset, result, warnings)
+    if dataset.ground_truth and dataset.has_truth_labels:
+        report["evaluation"] = _rounded(evaluate(result, dataset, args.eps).as_dict())
+
+    _write_json(args.report, report)
+    if args.output:
+        write_animals_csv(result, args.output)
+    if args.geojson:
+        write_geojson(result, args.geojson)
+    if args.assignments:
+        write_assignments_csv(result, args.assignments)
+    if args.dataset_out:
+        save_dataset(dataset, args.dataset_out)
+
+    summary = report["summary"]
+    progress.emit("done", percent=100, report=str(args.report), summary=summary)
+    if not args.progress:
+        print(
+            f"{summary['input_detections']} detections -> {summary['unique_animals']} unique animals "
+            f"({summary['duplicate_detections']} duplicates removed); report: {args.report}"
+        )
+    return 0
+
+
+def _write_json(path, payload) -> None:
+    from pathlib import Path
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+    tmp.replace(target)
+
+
+class UsageError(ValueError):
+    pass
+
+
 def cmd_simulate(args) -> int:
     overrides = {
         k: v
@@ -137,6 +293,9 @@ def cmd_simulate(args) -> int:
     cfg = profile_config(args.profile, **overrides)
     dataset = simulate_survey(cfg)
     save_dataset(dataset, args.output)
+    if args.export_raw:
+        paths = export_raw_logs(dataset, args.export_raw, include_gimbal_yaw=not args.no_gimbal_yaw)
+        print("raw logs: " + ", ".join(str(p) for p in paths.values()))
     observed = {d.truth_id for f in dataset.frames for d in f.detections if d.truth_id != "FP"}
     print(
         f"wrote {args.output}: {len(dataset.frames)} frames, {dataset.n_detections} detections "
@@ -260,7 +419,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--side-overlap", type=float)
     p.add_argument("--lat", type=float, help="field origin latitude")
     p.add_argument("--lon", type=float, help="field origin longitude")
+    p.add_argument(
+        "--export-raw",
+        metavar="DIR",
+        help="also write the survey as raw logs (DJI .SRT, telemetry CSV, bounding-box CSV)",
+    )
+    p.add_argument("--no-gimbal-yaw", action="store_true", help="omit gimbal yaw from the raw logs")
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("ingest", help="join raw telemetry and bounding-box logs into a dataset JSON")
+    _add_ingest_options(p)
+    p.add_argument("-o", "--output", required=True, help="dataset JSON to write")
+    p.set_defaults(func=cmd_ingest)
+
+    p = sub.add_parser(
+        "process",
+        help="ingest (or load) a flight, de-duplicate it and write a map report for the desktop app",
+    )
+    _add_ingest_options(p)
+    p.add_argument("--dataset", help="an engine dataset (.json/.csv) instead of raw logs")
+    p.add_argument("--report", required=True, help="map report JSON to write")
+    p.add_argument("-o", "--output", help="also write the unique-animal CSV")
+    p.add_argument("--geojson", help="also write unique animals as GeoJSON")
+    p.add_argument("--assignments", help="also write a per-detection audit CSV")
+    p.add_argument("--dataset-out", help="also write the ingested dataset JSON")
+    p.add_argument(
+        "--progress",
+        action="store_true",
+        help="emit machine-readable progress events (JSON lines) on stdout",
+    )
+    _add_dedup_options(p)
+    p.set_defaults(func=cmd_process)
 
     p = sub.add_parser("benchmark", help="run simulated flights and verify de-duplication accuracy")
     p.add_argument("--runs", type=int, default=10, help="simulated flights per profile (default: 10)")
@@ -282,7 +471,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (DatasetError, FileNotFoundError) as exc:
+    except (DatasetError, UsageError, FileNotFoundError, *INGEST_ERRORS) as exc:
+        if getattr(args, "progress", False):
+            print(json.dumps({"event": "error", "message": str(exc)}), flush=True)
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

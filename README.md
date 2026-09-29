@@ -6,8 +6,34 @@ the same animal is detected in 5–10 frames. This project maps every detection
 to real-world coordinates and collapses repeat sightings into one record per
 animal.
 
-This repository currently contains **Phase 1: the core spatial processing engine**
-(`livestock_engine`) and its CLI.
+The repository contains:
+
+* **Phase 1 – core spatial processing engine** (`src/livestock_engine`, Python):
+  ray casting, UTM mapping, DBSCAN de-duplication, and a CLI.
+* **Phase 2 – offline desktop app** (`desktop/`, Electron + React + Leaflet):
+  drag-and-drop of DJI `.SRT` / telemetry CSVs and AI bounding-box logs, and
+  an offline map with green distinct animals and red removed duplicates.
+  See [`desktop/README.md`](desktop/README.md).
+
+![Desktop app: 1,195 raw detections from the sample flight collapse to a headcount of 150](docs/desktop-app.png)
+
+## Phase 2 at a glance
+
+| Sprint | Deliverable | Where |
+| --- | --- | --- |
+| 2.1 Native app & local files | Electron + React + TypeScript shell, sandboxed renderer, typed and validated IPC; Node.js runs the Python engine as a child process | `desktop/src/main`, `desktop/src/preload` |
+| 2.1 Drop zones | Flight-log zone (`.SRT`, telemetry CSV) and detection-log zone (CSV / JSON / COCO / YOLO `.txt`), with automatic file-type detection | `desktop/src/renderer`, `livestock_engine/ingest` |
+| 2.2 Offline spatial viewer | Leaflet map fed from a local XYZ tile cache through a custom `tiles://` protocol, with a neutral grid when no cache exists | `desktop/src/main/tiles.ts`, `MapView.tsx` |
+| 2.2 Data layers | Green = distinct animals (cluster centroids), red = removed duplicate entries, plus the flight path, capture points and sighting links | `MapView.tsx`, `livestock_engine/report.py` |
+| Milestone 2 | Load a flight, count it and view the mapped coordinates locally. Verified by an end-to-end Electron test | `desktop/e2e/smoke.mjs` |
+
+Quick start for the desktop app (needs Python with this package installed, plus Node.js ≥ 20):
+
+```bash
+pip install -e .
+cd desktop && npm install && npm run dev
+# then drop examples/sample-flight/flight.SRT and detections.csv into the app
+```
 
 ## Phase 1 at a glance
 
@@ -45,6 +71,36 @@ livestock-engine benchmark --runs 10 --profile standard --profile oblique \
 ```
 
 `python -m livestock_engine ...` works as well.
+
+### Raw flight logs (Phase 2 ingestion)
+
+The engine also reads the files a pilot brings home. It joins each bounding
+box to the telemetry by image name, video frame number or time offset:
+
+```bash
+# Write a simulated survey as raw logs (DJI .SRT, per-photo telemetry CSV, box CSV)
+livestock-engine simulate -o output/sim.json --export-raw output/raw [--no-gimbal-yaw]
+
+# Join logs into an engine dataset…
+livestock-engine ingest --telemetry output/raw/flight.SRT --detections output/raw/detections.csv \
+    --image-width 4000 --image-height 3000 --fov 84 --fov-type diagonal -o output/dataset.json
+
+# …or ingest, de-duplicate and write the desktop map report in one step
+livestock-engine process --telemetry output/raw/flight.SRT --detections output/raw/detections.csv \
+    --report output/report.json -o output/animals.csv [--progress]
+```
+
+| Input | Supported |
+| --- | --- |
+| Telemetry | DJI `.SRT` subtitle logs (Mavic 3 / Air / Mini `[latitude: …]` style, Phantom 4 `GPS(…) BAROMETER:`, Mavic Pro `GPS (…) H …m`); telemetry CSVs with flexible column names and units (e.g. AirData `height_above_takeoff(feet)`, `time(millisecond)`) |
+| Detections | CSV or JSON with `xmin,ymin,xmax,ymax`, `x,y,width,height`, `cx,cy,w,h` or `x,y`; COCO results; YOLO `.txt` (one per image, normalised); pixel or normalised coordinates |
+| Frame link | image name, video frame number (`FrameCnt`, or time = frame / fps), or time offset in seconds (interpolated) |
+
+If the log has no gimbal yaw, the heading is derived from the GPS track. At
+lawnmower turns, each photo keeps the heading of the strip it belongs to. On
+simulated surveys this still recovers 150/150 animals. Detections that can't
+be linked to telemetry, or fall outside the image, are counted and reported as
+warnings rather than silently dropped.
 
 ## How it works
 
@@ -202,7 +258,11 @@ pytest
 Project layout:
 
 ```
+examples/sample-flight/   simulated raw logs (SRT, telemetry CSV, box CSV, truth)
+desktop/                  Electron + React desktop app (Phase 2) – see desktop/README.md
 src/livestock_engine/
+  ingest/          SRT / telemetry CSV / bounding-box parsers, telemetry join
+  report.py        map-ready JSON report for the desktop app
   camera.py        camera intrinsics (FOV → focal length) and frame pose
   geo.py           UTM zone selection, WGS84 ↔ UTM, grid convergence
   projection.py    rotation matrices, ray casting, inverse projection
@@ -213,5 +273,5 @@ src/livestock_engine/
   simulate.py      synthetic overlapping surveys with ground truth
   metrics.py       accuracy evaluation
   cli.py           `livestock-engine` command
-tests/             geometry, clustering and end-to-end tests
+tests/             geometry, clustering, ingestion and end-to-end tests
 ```
