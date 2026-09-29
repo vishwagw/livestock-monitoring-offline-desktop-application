@@ -47,8 +47,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Install engine build dependencies
-        run: pip install . pyinstaller
+      - name: Install pinned engine build dependencies
+        run: |
+          pip install -r requirements-build.txt
+          pip install --no-deps .
 
       - name: Freeze engine and verify it runs with no Python on PATH
         run: python packaging/build_engine.py

@@ -14,16 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.10", "3.12"]
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -e ".[dev]"
+      - name: Install pinned dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
+      - run: python -m pyflakes src tests packaging
       - run: pytest
-      - name: Milestone 1 accuracy gate
-        run: livestock-engine benchmark --runs 5 --profile standard --profile oblique --profile dense --profile harsh
+      - name: Accuracy gate (incl. dense sheep yards)
+        run: livestock-engine benchmark --runs 5 --profile standard --profile oblique --profile dense --profile harsh --profile sheep_pen
+      - name: Scale check (55k detections)
+        run: livestock-engine stress --animals 7000
 
   desktop:
     name: Desktop app (unit + packaged end-to-end)
@@ -38,7 +44,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - run: pip install -e . pyinstaller
+      - run: |
+          pip install -r requirements-build.txt
+          pip install --no-deps -e .
       - name: Freeze engine (PyInstaller) and smoke-test it without Python
         run: python packaging/build_engine.py
       - working-directory: desktop

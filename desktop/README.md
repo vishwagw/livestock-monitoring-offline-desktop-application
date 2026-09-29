@@ -17,7 +17,7 @@ no Python, Node.js or internet.
 
 ## Running it
 
-Requirements: Node.js ≥ 20, and Python ≥ 3.10 with the engine installed.
+Requirements: Node.js 22 (`.nvmrc`), and Python ≥ 3.11 with the engine installed (for development only; installed builds bundle the engine).
 
 ```bash
 # from the repository root
@@ -159,8 +159,13 @@ Camera presets cover common DJI models, or use **Custom**. Other settings:
 - **Video FPS**: for detection logs keyed by frame number.
 - **YOLO class names**: labels for numeric class ids.
 - **Heading from GPS track**: used when the log has no yaw.
-- De-duplication: cluster radius ε (2.0 m by default), frame alignment, and
-  the same-image rule.
+- De-duplication: cluster radius ε (2.0 m by default), frame alignment, the
+  same-image rule, and **Adapt to tightly packed animals** (dense-group mode
+  for sheep yards and feedlots; see `../docs/PERFORMANCE.md`).
+
+The map draws animals, duplicates and capture points with a canvas
+point-cloud layer (`src/renderer/src/lib/pointLayer.ts`), and the animal table
+is virtualised. A 221k-detection survey renders in about a second.
 
 ## Offline maps
 

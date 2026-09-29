@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import type { Report, ReportAnimal, ReportDetection, TileInfo } from '@shared/types'
 
 import { formatCoord, formatPercent } from '../lib/format'
+import { PointLayer } from '../lib/pointLayer'
 
 export interface LayerVisibility {
   unique: boolean
@@ -95,22 +96,38 @@ function duplicateTooltip(d: ReportDetection): string {
     </div>`
 }
 
-interface Layers {
-  unique: L.LayerGroup
-  duplicates: L.LayerGroup
+interface DataLayers {
   flightPath: L.LayerGroup
-  frames: L.LayerGroup
-  selection: L.LayerGroup
+  frames: PointLayer | null
+  unique: PointLayer | null
+  duplicates: PointLayer | null
 }
+
+type Hit = { kind: 'animal' | 'duplicate' | 'frame'; index: number } | null
+
+// Draw order (Leaflet panes): path < capture points < duplicates < animals < selection.
+// Green animals stay on top so the true headcount reads at any zoom, even in
+// dense yards with 7+ re-sightings per animal; red appears around them.
+const PANES: [string, number][] = [
+  ['lc-frames', 410],
+  ['lc-duplicates', 415],
+  ['lc-animals', 420],
+  ['lc-selection', 440]
+]
 
 export function MapView({ report, tiles, visibility, selectedAnimalId, onSelectAnimal }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const baseRef = useRef<L.Layer | null>(null)
   const gridRef = useRef<L.GridLayer | null>(null)
-  const layersRef = useRef<Layers | null>(null)
-  const rendererRef = useRef<L.Renderer | null>(null)
-  const markersRef = useRef<Map<string, L.CircleMarker>>(new Map())
+  const dataRef = useRef<DataLayers | null>(null)
+  const selectionRef = useRef<L.LayerGroup | null>(null)
+  // Index into report.detections for each point of the duplicates layer.
+  const dupIndexRef = useRef<Int32Array>(new Int32Array(0))
+  const reportRef = useRef<Report | null>(report)
+  reportRef.current = report
+  const visibilityRef = useRef(visibility)
+  visibilityRef.current = visibility
   const selectRef = useRef(onSelectAnimal)
   selectRef.current = onSelectAnimal
 
@@ -126,26 +143,74 @@ export function MapView({ report, tiles, visibility, selectedAnimalId, onSelectA
       worldCopyJump: true
     }).setView([0, 0], 3)
     L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map)
-    const renderer = L.canvas({ padding: 0.5 })
-    const layers: Layers = {
-      flightPath: L.layerGroup(),
-      frames: L.layerGroup(),
-      duplicates: L.layerGroup(),
-      unique: L.layerGroup(),
-      selection: L.layerGroup()
-    }
-    Object.values(layers).forEach((l) => l.addTo(map))
-    map.on('click', () => selectRef.current(null))
+    for (const [name, z] of PANES) map.createPane(name).style.zIndex = String(z)
+    const selection = L.layerGroup().addTo(map)
+    dataRef.current = { flightPath: L.layerGroup().addTo(map), frames: null, unique: null, duplicates: null }
+    selectionRef.current = selection
     mapRef.current = map
-    layersRef.current = layers
-    rendererRef.current = renderer
+
+    const hitAt = (point: L.Point): Hit => {
+      const data = dataRef.current
+      const vis = visibilityRef.current
+      if (!data) return null
+      const a = vis.unique && data.unique ? data.unique.hit(map, point, 9) : -1
+      if (a >= 0) return { kind: 'animal', index: a }
+      const d = vis.duplicates && data.duplicates ? data.duplicates.hit(map, point, 6) : -1
+      if (d >= 0) return { kind: 'duplicate', index: dupIndexRef.current[d] }
+      const f = vis.frames && data.frames ? data.frames.hit(map, point, 5) : -1
+      if (f >= 0) return { kind: 'frame', index: f }
+      return null
+    }
+
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const hit = hitAt(e.containerPoint)
+      const r = reportRef.current
+      if (hit?.kind === 'animal' && r) selectRef.current(r.animals[hit.index].id)
+      else if (hit?.kind === 'duplicate' && r) selectRef.current(r.detections[hit.index].animal_id)
+      else selectRef.current(null)
+    })
+
+    const tooltip = L.tooltip({ direction: 'top', offset: [0, -6], opacity: 0.95 })
+    let pending = 0
+    map.on('mousemove', (e: L.LeafletMouseEvent) => {
+      cancelAnimationFrame(pending)
+      pending = requestAnimationFrame(() => {
+        const hit = hitAt(e.containerPoint)
+        const r = reportRef.current
+        map.getContainer().style.cursor = hit && hit.kind !== 'frame' ? 'pointer' : ''
+        if (!hit || !r) {
+          map.closeTooltip(tooltip)
+          return
+        }
+        let latlng: L.LatLngExpression
+        let html: string
+        if (hit.kind === 'animal') {
+          const a = r.animals[hit.index]
+          latlng = [a.lat, a.lon]
+          html = `${escapeHtml(a.id)} · ${escapeHtml(a.label)} · ${a.observations} sightings`
+        } else if (hit.kind === 'duplicate') {
+          const d = r.detections[hit.index]
+          latlng = [d.raw_lat, d.raw_lon]
+          html = duplicateTooltip(d)
+        } else {
+          const f = r.frames[hit.index]
+          latlng = [f.lat, f.lon]
+          html = `${escapeHtml(f.id)} · ${f.altitude_agl_m.toFixed(1)} m · ${f.detections} detections`
+        }
+        tooltip.setLatLng(latlng).setContent(html)
+        if (!map.hasLayer(tooltip)) map.openTooltip(tooltip)
+      })
+    })
+    map.on('mouseout', () => map.closeTooltip(tooltip))
+
     const observer = new ResizeObserver(() => map.invalidateSize())
     observer.observe(container.current)
     return () => {
       observer.disconnect()
+      cancelAnimationFrame(pending)
       map.remove()
       mapRef.current = null
-      layersRef.current = null
+      dataRef.current = null
     }
   }, [])
 
@@ -184,12 +249,15 @@ export function MapView({ report, tiles, visibility, selectedAnimalId, onSelectA
   // Rebuild data layers whenever a new report arrives.
   useEffect(() => {
     const map = mapRef.current
-    const layers = layersRef.current
-    if (!map || !layers) return
-    Object.values(layers).forEach((l) => l.clearLayers())
-    markersRef.current.clear()
+    const data = dataRef.current
+    if (!map || !data) return
+    data.flightPath.clearLayers()
+    for (const key of ['frames', 'unique', 'duplicates'] as const) {
+      if (data[key]) map.removeLayer(data[key]!)
+      data[key] = null
+    }
+    selectionRef.current?.clearLayers()
     if (!report) return
-    const renderer = rendererRef.current ?? undefined
 
     for (const path of report.flight_paths) {
       if (path.coordinates.length > 1) {
@@ -198,109 +266,81 @@ export function MapView({ report, tiles, visibility, selectedAnimalId, onSelectA
           weight: 2,
           opacity: 0.7,
           dashArray: '6 6',
-          interactive: false,
-          renderer
-        }).addTo(layers.flightPath)
+          interactive: false
+        }).addTo(data.flightPath)
       }
     }
-    for (const f of report.frames) {
-      L.circleMarker([f.lat, f.lon], {
-        radius: 2.5,
-        color: MAP_COLORS.frame,
-        weight: 1,
-        fillOpacity: 0.8,
-        renderer
-      })
-        .bindTooltip(`${escapeHtml(f.id)} · ${f.altitude_agl_m.toFixed(1)} m · ${f.detections} detections`)
-        .addTo(layers.frames)
-    }
-    for (const a of report.animals) {
-      const marker = L.circleMarker([a.lat, a.lon], {
-        radius: 6,
-        color: '#ffffff',
-        weight: 1.5,
-        fillColor: MAP_COLORS.unique,
-        fillOpacity: 0.95,
-        renderer
-      })
-        .bindPopup(animalPopup(a))
-        .on('click', (e) => {
-          L.DomEvent.stopPropagation(e)
-          selectRef.current(a.id)
-        })
-        .addTo(layers.unique)
-      markersRef.current.set(a.id, marker)
-    }
-    // Duplicates are drawn at their raw ray-cast positions, above the
-    // animals: zoomed out every green animal shows a red core for the
-    // re-sightings it absorbed; zoomed in they separate around it.
-    for (const d of report.detections) {
-      if (d.status !== 'duplicate') continue
-      L.circleMarker([d.raw_lat, d.raw_lon], {
-        radius: 3,
-        color: MAP_COLORS.duplicate,
-        weight: 1,
-        fillColor: MAP_COLORS.duplicate,
-        fillOpacity: 0.75,
-        renderer
-      })
-        .bindTooltip(duplicateTooltip(d), { direction: 'top', offset: [0, -4] })
-        .on('click', (e) => {
-          L.DomEvent.stopPropagation(e)
-          if (d.animal_id) selectRef.current(d.animal_id)
-        })
-        .addTo(layers.duplicates)
-    }
-    if (report.bounds) {
-      map.fitBounds(report.bounds, { padding: [40, 40], maxZoom: 19 })
-    }
+    data.frames = new PointLayer(
+      report.frames.map((f) => f.lat),
+      report.frames.map((f) => f.lon),
+      { radius: 2.5, fill: MAP_COLORS.frame, opacity: 0.85 },
+      'lc-frames'
+    )
+    data.unique = new PointLayer(
+      report.animals.map((a) => a.lat),
+      report.animals.map((a) => a.lon),
+      { radius: 6, fill: MAP_COLORS.unique, stroke: '#ffffff', strokeWidth: 1.5, opacity: 0.95 },
+      'lc-animals'
+    )
+    // Duplicates are drawn at their raw ray-cast positions, beneath the
+    // animals: each green animal carries a red halo of the re-sightings it
+    // absorbed, which separate around it as you zoom in.
+    const dupIdx: number[] = []
+    report.detections.forEach((d, i) => d.status === 'duplicate' && dupIdx.push(i))
+    dupIndexRef.current = Int32Array.from(dupIdx)
+    data.duplicates = new PointLayer(
+      dupIdx.map((i) => report.detections[i].raw_lat),
+      dupIdx.map((i) => report.detections[i].raw_lon),
+      { radius: 3, fill: MAP_COLORS.duplicate, opacity: 0.8 },
+      'lc-duplicates'
+    )
+    if (report.bounds) map.fitBounds(report.bounds, { padding: [40, 40], maxZoom: 19, animate: false })
   }, [report])
 
-  // Toggle layer visibility.
+  // Toggle layer visibility (also runs after a report rebuilds the layers).
   useEffect(() => {
     const map = mapRef.current
-    const layers = layersRef.current
-    if (!map || !layers) return
+    const data = dataRef.current
+    if (!map || !data) return
     ;(Object.keys(visibility) as (keyof LayerVisibility)[]).forEach((key) => {
-      const layer = layers[key]
+      const layer = data[key]
+      if (!layer) return
       if (visibility[key] && !map.hasLayer(layer)) layer.addTo(map)
       if (!visibility[key] && map.hasLayer(layer)) map.removeLayer(layer)
-    })
-    // Keep the drawing order stable: path < frames < unique < duplicates.
-    ;(['flightPath', 'frames', 'unique', 'duplicates', 'selection'] as const).forEach((key) => {
-      if (map.hasLayer(layers[key])) layers[key].eachLayer((l) => (l as L.Path).bringToFront?.())
     })
   }, [visibility, report])
 
   // Highlight the selected animal and link it to the observations it absorbed.
   useEffect(() => {
     const map = mapRef.current
-    const layers = layersRef.current
-    if (!map || !layers) return
-    layers.selection.clearLayers()
+    const selection = selectionRef.current
+    if (!map || !selection) return
+    selection.clearLayers()
+    map.closePopup()
     if (!report || !selectedAnimalId) return
     const animal = report.animals.find((a) => a.id === selectedAnimalId)
     if (!animal) return
-    const members = report.detections.filter((d) => d.animal_id === animal.id)
-    for (const d of members) {
+    for (const d of report.detections) {
+      if (d.animal_id !== animal.id) continue
       L.polyline(
         [
           [animal.lat, animal.lon],
           [d.raw_lat, d.raw_lon]
         ],
-        { color: MAP_COLORS.link, weight: 1.5, opacity: 0.9, interactive: false }
-      ).addTo(layers.selection)
+        { color: MAP_COLORS.link, weight: 1.5, opacity: 0.9, interactive: false, pane: 'lc-selection' }
+      ).addTo(selection)
     }
     L.circleMarker([animal.lat, animal.lon], {
       radius: 11,
       color: MAP_COLORS.link,
       weight: 2.5,
       fill: false,
-      interactive: false
-    }).addTo(layers.selection)
+      interactive: false,
+      pane: 'lc-selection'
+    }).addTo(selection)
     const zoom = Math.max(map.getZoom(), 21)
     map.flyTo([animal.lat, animal.lon], zoom, { duration: 0.5 })
-    markersRef.current.get(animal.id)?.openPopup()
+    L.popup({ offset: [0, -6], autoPan: false }).setLatLng([animal.lat, animal.lon]).setContent(animalPopup(animal)).openOn(map)
   }, [selectedAnimalId, report])
 
   return <div ref={container} className="map" role="region" aria-label="Flight map" />

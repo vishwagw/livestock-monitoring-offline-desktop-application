@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livestock-counter.local/schemas/detections.schema.json",
+  "title": "Bounding-box log (JSON form)",
+  "description": "A list of detection records, or {\"detections\"|\"predictions\"|\"results\": [...]}. Each record needs a frame key (image name, frame number or time) and a box. Column-name aliases are the same as for CSV logs (docs/INTEGRATION_GUIDE.md). COCO result files (images + annotations) are also accepted.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/list"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "detections": {
+          "$ref": "#/$defs/list"
+        },
+        "predictions": {
+          "$ref": "#/$defs/list"
+        },
+        "results": {
+          "$ref": "#/$defs/list"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "detections"
+          ]
+        },
+        {
+          "required": [
+            "predictions"
+          ]
+        },
+        {
+          "required": [
+            "results"
+          ]
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/coco"
+    }
+  ],
+  "$defs": {
+    "list": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "record": {
+      "type": "object",
+      "anyOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "frame_id"
+          ]
+        },
+        {
+          "required": [
+            "filename"
+          ]
+        },
+        {
+          "required": [
+            "frame"
+          ]
+        },
+        {
+          "required": [
+            "frame_number"
+          ]
+        },
+        {
+          "required": [
+            "time_s"
+          ]
+        }
+      ],
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "frame_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "frame": {
+          "type": "integer"
+        },
+        "frame_number": {
+          "type": "integer"
+        },
+        "time_s": {
+          "type": "number"
+        },
+        "video": {
+          "type": "string",
+          "description": "Telemetry file stem this detection belongs to (needed with several SRT files)."
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "[x1, y1, x2, y2] pixels (or normalised 0-1)."
+        },
+        "xmin": {
+          "type": "number"
+        },
+        "ymin": {
+          "type": "number"
+        },
+        "xmax": {
+          "type": "number"
+        },
+        "ymax": {
+          "type": "number"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        },
+        "h": {
+          "type": "number"
+        },
+        "label": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string"
+        },
+        "class_id": {
+          "type": "integer"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "score": {
+          "type": "number"
+        },
+        "detection_id": {
+          "type": "string"
+        }
+      }
+    },
+    "coco": {
+      "type": "object",
+      "required": [
+        "annotations"
+      ],
+      "properties": {
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "file_name": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "annotations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "image_id",
+              "bbox"
+            ],
+            "properties": {
+              "image_id": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "category_id": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "bbox": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "[x, y, width, height]"
+              },
+              "score": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

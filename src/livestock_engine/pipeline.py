@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from .dedup import DedupConfig, DedupResult, GroundDetections, deduplicate
+from .density import DensityInfo
+from .density import plan as plan_density
 from .geo import LocalUTM
 from .models import Dataset, Frame
 from .projection import camera_rotation, cast_to_ground
 from .progress import NullTracker, ProgressTracker
-from .registration import FrameCorrection, RegistrationConfig, register_frames
+from .registration import FrameCorrection, RegistrationConfig, register_frames, update_cumulative
+from .sync import SyncConfig, synchronise
 
 
 @dataclass
@@ -30,6 +33,7 @@ class PipelineResult:
     # Unregistered projections, kept for auditing.
     raw_ground: GroundDetections | None = None
     frame_corrections: dict[str, FrameCorrection] = field(default_factory=dict)
+    density: DensityInfo | None = None
 
     @property
     def animals(self):
@@ -49,6 +53,8 @@ class PipelineResult:
             "frame_exclusivity_splits": self.dedup.n_frame_splits,
             "label_counts": _label_counts(self.dedup),
             "registration": _registration_summary(self.frame_corrections),
+            "density": self.density.as_dict() if self.density else None,
+            "suppressed_duplicate_boxes": self.dedup.n_suppressed,
         }
 
 
@@ -159,6 +165,21 @@ def run_pipeline(
     )
     raw_ground = ground
     corrections: dict[str, FrameCorrection] = {}
+
+    # Dense groups: tighten eps and pre-align frames without clustering.
+    config, density = plan_density(ground.xy, ground.frame_ids, config)
+    if density.mode == "dense" and len(ground):
+        georef.update(
+            1.0,
+            f"Dense groups (~{density.spacing_m:.2f} m apart): pre-aligning frames, eps {config.eps_m:.2f} m",
+        )
+        codes = np.unique(np.asarray(ground.frame_ids), return_inverse=True)[1]
+        xy = ground.xy
+        for radius in (1.5, 0.6):
+            sync = synchronise(xy, codes, SyncConfig(radius_m=radius))
+            xy = xy - sync.translations[codes]
+        density.sync_pairs, density.sync_links, density.sync_residual_m = sync.n_pairs, sync.n_links, sync.residual_m
+        ground = replace(ground, easting=xy[:, 0].copy(), northing=xy[:, 1].copy())
     cluster = progress.stage("cluster", f"Clustering {len(ground)} sightings (eps {config.eps_m} m)")
     align = None
 
@@ -172,6 +193,11 @@ def run_pipeline(
 
     if registration is not None and registration.iterations > 0 and len(ground):
         ground, dedup, corrections = register_frames(ground, config, registration, on_step=on_step)
+        if density.mode == "dense":
+            frame_index: dict[str, list[int]] = {}
+            for i, f in enumerate(ground.frame_ids):
+                frame_index.setdefault(f, []).append(i)
+            update_cumulative(corrections, raw_ground.xy, ground.xy, frame_index)
         align.done(f"Aligned {len(corrections)} frames: {dedup.n_unique} animals", animals=dedup.n_unique)
     else:
         dedup = deduplicate(ground, config)
@@ -194,4 +220,5 @@ def run_pipeline(
         projection=stats,
         raw_ground=raw_ground,
         frame_corrections=corrections,
+        density=density,
     )

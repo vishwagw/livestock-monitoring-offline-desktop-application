@@ -93,14 +93,14 @@ describe('buildProcessArgs', () => {
     const raw = buildProcessArgs(
       request({
         flight: { ...DEFAULT_SETTINGS.flight, defaultAltitudeM: 55, deriveHeading: false, classNames: ' cattle,sheep ' },
-        clustering: { epsM: 1.5, registration: false, frameExclusivity: false }
+        clustering: { epsM: 1.5, registration: false, frameExclusivity: false, adaptiveDensity: false }
       }),
       (id) => files[id],
       '/r'
     )
     expect(raw[raw.indexOf('--default-altitude') + 1]).toBe('55')
     expect(raw[raw.indexOf('--class-names') + 1]).toBe('cattle,sheep')
-    expect(raw).toEqual(expect.arrayContaining(['--no-derive-heading', '--no-registration', '--no-frame-exclusivity']))
+    expect(raw).toEqual(expect.arrayContaining(['--no-derive-heading', '--no-registration', '--no-frame-exclusivity', '--no-adaptive-density']))
 
     const ds = buildProcessArgs(request({ datasetId: 'ds' }), (id) => files[id], '/r')
     expect(ds[ds.indexOf('--dataset') + 1]).toBe('/data/flight.json')

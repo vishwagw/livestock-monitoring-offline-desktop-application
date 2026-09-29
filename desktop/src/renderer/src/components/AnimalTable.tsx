@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ReportAnimal } from '@shared/types'
 
 import { formatPercent } from '../lib/format'
+import { ROW_HEIGHT, visibleWindow } from '../lib/virtual'
 
 type SortKey = 'id' | 'label' | 'confidence' | 'observations' | 'spread_m'
 
@@ -23,6 +24,17 @@ const COLUMNS: { key: SortKey; label: string; numeric?: boolean }[] = [
 export function AnimalTable({ animals, selectedId, onSelect }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'id', dir: 1 })
   const [filter, setFilter] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewport, setViewport] = useState(400)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => setViewport(el.clientHeight))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -33,6 +45,20 @@ export function AnimalTable({ animals, selectedId, onSelect }: Props) {
       return (x < y ? -1 : x > y ? 1 : 0) * sort.dir
     })
   }, [animals, sort, filter])
+
+  // Bring an animal selected on the map into view.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !selectedId) return
+    const i = rows.findIndex((a) => a.id === selectedId)
+    if (i < 0) return
+    const top = i * ROW_HEIGHT
+    if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
+      el.scrollTop = Math.max(0, top - el.clientHeight / 2)
+    }
+  }, [selectedId, rows])
+
+  const win = visibleWindow(rows.length, scrollTop, viewport)
 
   return (
     <div className="table-wrap">
@@ -46,7 +72,7 @@ export function AnimalTable({ animals, selectedId, onSelect }: Props) {
           aria-label="Filter animals"
         />
       </div>
-      <div className="table-scroll">
+      <div className="table-scroll" ref={scrollRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
         <table className="animals">
           <thead>
             <tr>
@@ -68,7 +94,8 @@ export function AnimalTable({ animals, selectedId, onSelect }: Props) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((a) => (
+            {win.before > 0 && <tr aria-hidden style={{ height: win.before }} />}
+            {rows.slice(win.start, win.end).map((a) => (
               <tr
                 key={a.id}
                 className={a.id === selectedId ? 'selected' : undefined}
@@ -93,6 +120,7 @@ export function AnimalTable({ animals, selectedId, onSelect }: Props) {
                 <td className="num">{a.spread_m.toFixed(2)} m</td>
               </tr>
             ))}
+            {win.after > 0 && <tr aria-hidden style={{ height: win.after }} />}
           </tbody>
         </table>
       </div>

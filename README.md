@@ -17,26 +17,37 @@ The repository contains:
 * **Phase 3 – standalone installers**: the engine is frozen with PyInstaller
   and shipped inside the app, with a live processing dashboard. Installers
   are `.exe` / `.dmg` / AppImage / `.deb` and need no Python, Node.js or network.
+* **Phase 4 – validation, performance and handover**:
+  - dense-group mode for sheep yards and feedlots;
+  - 50k–220k detection surveys processed in seconds;
+  - a validation tool for real flights;
+  - integration guides with JSON Schemas;
+  - reproducible build and source packages.
+
+## Documentation
+
+| Guide | For |
+| --- | --- |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | pilots using the app in the field |
+| [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) + [schemas/](schemas) | developers producing input files or consuming results |
+| [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | maintainers: architecture, setup, tests, extension points |
+| [docs/BUILD_AND_RELEASE.md](docs/BUILD_AND_RELEASE.md) | building signed installers per OS; release procedure |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | accuracy and speed validation results |
+| [docs/HANDOVER.md](docs/HANDOVER.md) | deliverables, IP and licensing, open items |
+| [desktop/README.md](desktop/README.md) | the Electron app's internals and security model |
+| [CHANGELOG.md](CHANGELOG.md) | release history |
 
 ![Desktop app: 1,195 raw detections from the sample flight collapse to a headcount of 150](docs/desktop-app.png)
 
-## Phase 2 at a glance
+## Phase 4 at a glance
 
 | Sprint | Deliverable | Where |
 | --- | --- | --- |
-| 2.1 Native app & local files | Electron + React + TypeScript shell, sandboxed renderer, typed and validated IPC; Node.js runs the Python engine as a child process | `desktop/src/main`, `desktop/src/preload` |
-| 2.1 Drop zones | Flight-log zone (`.SRT`, telemetry CSV) and detection-log zone (CSV / JSON / COCO / YOLO `.txt`), with automatic file-type detection | `desktop/src/renderer`, `livestock_engine/ingest` |
-| 2.2 Offline spatial viewer | Leaflet map fed from a local XYZ tile cache through a custom `tiles://` protocol, with a neutral grid when no cache exists | `desktop/src/main/tiles.ts`, `MapView.tsx` |
-| 2.2 Data layers | Green = distinct animals (cluster centroids), red = removed duplicate entries, plus the flight path, capture points and sighting links | `MapView.tsx`, `livestock_engine/report.py` |
-| Milestone 2 | Load a flight, count it and view the mapped coordinates locally. Verified by an end-to-end Electron test | `desktop/e2e/smoke.mjs` |
-
-Quick start for the desktop app (needs Python with this package installed, plus Node.js ≥ 20):
-
-```bash
-pip install -e .
-cd desktop && npm install && npm run dev
-# then drop examples/sample-flight/flight.SRT and detections.csv into the app
-```
+| 4.1 Stress testing | Full raw-log pipeline at 55k / 110k / 221k detections: 4.7 / 10.3 / 21.0 s, linear, 100% accurate (`livestock-engine stress`). Engine 2.8× faster at 55k; desktop map 16× faster at 221k (canvas point layers, virtualised table) | `dedup.py`, `desktop/src/renderer/src/lib/pointLayer.ts` |
+| 4.1 Tight animal groups | Dense-group mode: in-image spacing detection, clustering-free frame pre-alignment, adaptive ε, same-image double-box suppression. Sheep yards 0.6–0.9 m apart: 72–96% → **99.4–99.9%**, with no under-counting | `density.py`, `sync.py` |
+| 4.1 Real-flight validation | `livestock-engine validate` scores any report against surveyed positions or gate counts | `validation.py` |
+| 4.2 Integration guides | Input schemas, frame-matching rules, outputs, CLI, Python API. JSON Schemas are tested against real output; the docs are tested against the code | `docs/INTEGRATION_GUIDE.md`, `schemas/` |
+| 4.2 Handover package | Developer / build / pilot guides, pinned build environments, license inventory, reproducible source archive | `docs/`, `requirements*.txt`, `Makefile`, `packaging/` |
 
 ## Phase 3 at a glance
 
@@ -63,6 +74,24 @@ npm run test:release                    # launch the packaged app offline, no Py
 Push a `v*` tag, or run the **Release installers** workflow, to build all
 platforms and attach them to a draft GitHub release.
 
+## Phase 2 at a glance
+
+| Sprint | Deliverable | Where |
+| --- | --- | --- |
+| 2.1 Native app & local files | Electron + React + TypeScript shell, sandboxed renderer, typed and validated IPC; Node.js runs the Python engine as a child process | `desktop/src/main`, `desktop/src/preload` |
+| 2.1 Drop zones | Flight-log zone (`.SRT`, telemetry CSV) and detection-log zone (CSV / JSON / COCO / YOLO `.txt`), with automatic file-type detection | `desktop/src/renderer`, `livestock_engine/ingest` |
+| 2.2 Offline spatial viewer | Leaflet map fed from a local XYZ tile cache through a custom `tiles://` protocol, with a neutral grid when no cache exists | `desktop/src/main/tiles.ts`, `MapView.tsx` |
+| 2.2 Data layers | Green = distinct animals (cluster centroids), red = removed duplicate entries, plus the flight path, capture points and sighting links | `MapView.tsx`, `livestock_engine/report.py` |
+| Milestone 2 | Load a flight, count it and view the mapped coordinates locally. Verified by an end-to-end Electron test | `desktop/e2e/smoke.mjs` |
+
+Quick start for the desktop app (needs Python with this package installed, plus Node.js ≥ 20):
+
+```bash
+pip install -e .
+cd desktop && npm install && npm run dev
+# then drop examples/sample-flight/flight.SRT and detections.csv into the app
+```
+
 ## Phase 1 at a glance
 
 | Sprint | Deliverable | Module |
@@ -77,7 +106,7 @@ and DBSCAN once. The desktop app uses it to validate an engine before running it
 
 ## Install
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.11. For exact, reproducible versions use `pip install -r requirements-dev.txt && pip install --no-deps -e .`
 
 ```bash
 pip install -e ".[dev]"
@@ -289,6 +318,8 @@ pytest
 Project layout:
 
 ```
+docs/                     user, integration, developer, build & release, performance, handover guides
+schemas/                  JSON Schemas of every input/output format (tested against real output)
 examples/sample-flight/   simulated raw logs (SRT, telemetry CSV, box CSV, truth)
 packaging/                PyInstaller spec + build_engine.py (freeze and self-test the engine)
 .github/workflows/        CI (tests, packaged E2E) and release (per-OS installers)
@@ -297,6 +328,9 @@ src/livestock_engine/
   ingest/          SRT / telemetry CSV / bounding-box parsers, telemetry join
   report.py        map-ready JSON report for the desktop app
   progress.py      weighted, throttled stage progress (JSON events)
+  density.py       dense-group detection and adaptive cluster radius
+  sync.py          clustering-free frame pre-alignment (pairwise voting + pose graph)
+  validation.py    scoring reports against real ground truth
   camera.py        camera intrinsics (FOV → focal length) and frame pose
   geo.py           UTM zone selection, WGS84 ↔ UTM, grid convergence
   projection.py    rotation matrices, ray casting, inverse projection

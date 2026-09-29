@@ -62,6 +62,8 @@ export interface ClusteringSettings {
   epsM: number
   registration: boolean
   frameExclusivity: boolean
+  /** Tighten eps and pre-align frames where animals stand closer than eps. */
+  adaptiveDensity: boolean
 }
 
 export interface RunRequest {
@@ -100,6 +102,13 @@ export interface ReportSummary {
   duplicate_detections: number
   frames: number
   label_counts: Record<string, number>
+  density: {
+    mode: 'normal' | 'dense'
+    spacing_m: number | null
+    eps_m: number
+    eps_effective_m: number
+  } | null
+  suppressed_duplicate_boxes: number
   registration: {
     enabled: boolean
     frames?: number
@@ -219,7 +228,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     deriveHeading: true,
     classNames: ''
   },
-  clustering: { epsM: 2, registration: true, frameExclusivity: true }
+  clustering: { epsM: 2, registration: true, frameExclusivity: true, adaptiveDensity: true }
 }
 
 /** The API the preload script exposes on `window.livestock`. */

@@ -81,6 +81,7 @@ export function buildProcessArgs(
   args.push('--eps', String(clustering.epsM))
   if (!clustering.registration) args.push('--no-registration')
   if (!clustering.frameExclusivity) args.push('--no-frame-exclusivity')
+  if (!clustering.adaptiveDensity) args.push('--no-adaptive-density')
   args.push(
     '--report', join(runDir, ENGINE_OUTPUTS.report),
     '-o', join(runDir, ENGINE_OUTPUTS.csv),

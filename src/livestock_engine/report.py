@@ -94,6 +94,17 @@ def build_report(dataset: Dataset, result: PipelineResult, warnings: list[str] |
             lons.append(lon)
     bounds = [[min(lats), min(lons)], [max(lats), max(lons)]] if lats else None
 
+    warnings = list(warnings or [])
+    density = result.density
+    if density is not None and density.mode == "dense":
+        warnings.append(
+            f"Dense groups detected (animals ~{density.spacing_m:.2f} m apart): frames were pre-aligned "
+            f"and the cluster radius tightened from {density.eps_m:g} m to {density.eps_effective_m:.2f} m."
+        )
+    if result.dedup.n_suppressed:
+        warnings.append(
+            f"{result.dedup.n_suppressed} duplicate boxes of the same animal in the same image were merged."
+        )
     summary = result.summary()
     summary["frames"] = len(dataset.frames)
     summary["duplicate_detections"] = sum(1 for d in detections if d["status"] == "duplicate")
@@ -124,5 +135,5 @@ def build_report(dataset: Dataset, result: PipelineResult, warnings: list[str] |
         "frames": frames,
         "flight_paths": flight_paths,
         "ingest": dataset.metadata.get("ingest"),
-        "warnings": list(warnings or []),
+        "warnings": warnings,
     }

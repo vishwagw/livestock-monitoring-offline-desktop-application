@@ -49,7 +49,7 @@ describe('SettingsStore', () => {
     const path = join(dir, 'nested', 'settings.json')
     const store = new SettingsStore(path)
     expect(await store.load()).toEqual(DEFAULT_SETTINGS)
-    await store.update({ clustering: { epsM: 1.5, registration: false, frameExclusivity: true } })
+    await store.update({ clustering: { epsM: 1.5, registration: false, frameExclusivity: true, adaptiveDensity: true } })
     expect((await new SettingsStore(path).load()).clustering.epsM).toBe(1.5)
 
     writeFileSync(path, JSON.stringify({ camera: { fovDeg: 999 }, clustering: { epsM: 3 }, pythonPath: 42 }))

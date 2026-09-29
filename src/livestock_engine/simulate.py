@@ -35,6 +35,12 @@ class SimulationConfig:
     herd_spread_m: float = 18.0
     min_separation_m: float = 3.0
     species: tuple[str, ...] = ("cattle",)
+    # "herds": Gaussian herds in open pasture; "pens": animals packed
+    # uniformly into rectangular pens (e.g. sheep yards before shearing).
+    layout: str = "herds"
+    n_pens: int = 4
+    pen_width_m: float = 16.0
+    pen_height_m: float = 12.0
     # Flight
     altitude_agl_m: float = 60.0
     front_overlap: float = 0.70
@@ -75,6 +81,21 @@ PROFILES: dict[str, dict] = {
     "standard": {},
     "oblique": dict(gimbal_pitch_deg=-75.0, flight_direction_deg=35.0),
     "dense": dict(n_animals=250, n_herds=3, herd_spread_m=14.0, min_separation_m=2.5),
+    # Sheep packed into yards: ~1 m apart, well inside the 2 m cattle envelope.
+    "sheep_pen": dict(
+        layout="pens",
+        n_animals=480,
+        n_pens=4,
+        pen_width_m=16.0,
+        pen_height_m=12.0,
+        min_separation_m=0.9,
+        species=("sheep",),
+        altitude_agl_m=40.0,
+        field_width_m=120.0,
+        field_height_m=90.0,
+    ),
+    # >50,000 detections: a 2 km x 1.5 km station with 7,000 head.
+    "stress": dict(n_animals=7000, n_herds=24, herd_spread_m=22.0, field_width_m=2000.0, field_height_m=1500.0),
     "harsh": dict(
         gps_sigma_m=0.4,
         altitude_sigma_m=0.5,
@@ -91,18 +112,76 @@ PROFILES: dict[str, dict] = {
 def profile_config(name: str, **overrides) -> SimulationConfig:
     if name not in PROFILES:
         raise ValueError(f"unknown profile {name!r}; choose from {', '.join(PROFILES)}")
-    return replace(SimulationConfig(), **PROFILES[name], **overrides)
+    return replace(SimulationConfig(), **{**PROFILES[name], **overrides})
+
+
+class _SeparationGrid:
+    """Spatial hash for O(1) minimum-separation checks while placing animals."""
+
+    def __init__(self, cell: float) -> None:
+        self.cell = max(cell, 1e-6)
+        self.cells: dict[tuple[int, int], list[np.ndarray]] = {}
+
+    def _key(self, p: np.ndarray) -> tuple[int, int]:
+        return int(p[0] // self.cell), int(p[1] // self.cell)
+
+    def fits(self, p: np.ndarray, min_sep: float) -> bool:
+        kx, ky = self._key(p)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for q in self.cells.get((kx + dx, ky + dy), ()):
+                    if (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 < min_sep * min_sep:
+                        return False
+        return True
+
+    def add(self, p: np.ndarray) -> None:
+        self.cells.setdefault(self._key(p), []).append(p)
+
+
+def _pen_boxes(cfg: SimulationConfig, rng: np.random.Generator) -> list[tuple[float, float, float, float]]:
+    """Non-overlapping pens laid out on a jittered grid with 4 m alleys."""
+    cols = max(1, int(np.ceil(np.sqrt(cfg.n_pens))))
+    rows = int(np.ceil(cfg.n_pens / cols))
+    alley = 4.0
+    block_w, block_h = cfg.pen_width_m + alley, cfg.pen_height_m + alley
+    x0 = (cfg.field_width_m - cols * block_w) / 2
+    y0 = (cfg.field_height_m - rows * block_h) / 2
+    if x0 < 0 or y0 < 0:
+        raise ValueError("pens do not fit in the field; enlarge the field or use fewer/smaller pens")
+    boxes = []
+    for k in range(cfg.n_pens):
+        r, c = divmod(k, cols)
+        x = x0 + c * block_w + rng.uniform(0, alley / 2)
+        y = y0 + r * block_h + rng.uniform(0, alley / 2)
+        boxes.append((x, y, x + cfg.pen_width_m, y + cfg.pen_height_m))
+    return boxes
 
 
 def _place_animals(cfg: SimulationConfig, rng: np.random.Generator) -> np.ndarray:
-    """Herd-clustered positions in field-local metres, honouring min separation."""
-    margin = cfg.herd_spread_m
-    centres = np.column_stack(
-        [
-            rng.uniform(margin, cfg.field_width_m - margin, cfg.n_herds),
-            rng.uniform(margin, cfg.field_height_m - margin, cfg.n_herds),
-        ]
-    )
+    """Animal positions in field-local metres, honouring the minimum separation."""
+    grid = _SeparationGrid(cfg.min_separation_m)
+    if cfg.layout == "pens":
+        boxes = _pen_boxes(cfg, rng)
+
+        def propose() -> np.ndarray:
+            x1, y1, x2, y2 = boxes[rng.integers(len(boxes))]
+            return np.array([rng.uniform(x1, x2), rng.uniform(y1, y2)])
+
+    elif cfg.layout == "herds":
+        margin = cfg.herd_spread_m
+        centres = np.column_stack(
+            [
+                rng.uniform(margin, cfg.field_width_m - margin, cfg.n_herds),
+                rng.uniform(margin, cfg.field_height_m - margin, cfg.n_herds),
+            ]
+        )
+
+        def propose() -> np.ndarray:
+            return centres[rng.integers(cfg.n_herds)] + rng.normal(0.0, cfg.herd_spread_m, 2)
+
+    else:
+        raise ValueError(f"unknown layout {cfg.layout!r}")
+
     placed: list[np.ndarray] = []
     attempts = 0
     max_attempts = cfg.n_animals * 500
@@ -113,12 +192,12 @@ def _place_animals(cfg: SimulationConfig, rng: np.random.Generator) -> np.ndarra
                 "could not place animals with the requested separation; "
                 "reduce n_animals or min_separation_m"
             )
-        c = centres[rng.integers(cfg.n_herds)]
-        p = c + rng.normal(0.0, cfg.herd_spread_m, 2)
+        p = propose()
         if not (0 <= p[0] <= cfg.field_width_m and 0 <= p[1] <= cfg.field_height_m):
             continue
-        if placed and np.min(np.linalg.norm(np.asarray(placed) - p, axis=1)) < cfg.min_separation_m:
+        if not grid.fits(p, cfg.min_separation_m):
             continue
+        grid.add(p)
         placed.append(p)
     return np.asarray(placed)
 

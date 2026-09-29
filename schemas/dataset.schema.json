@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livestock-counter.local/schemas/dataset.schema.json",
+  "title": "Engine dataset (input)",
+  "description": "Frames with pose metadata and pixel detections. Accepted by 'dedup --dataset' / 'process --dataset' and the desktop app's 'Open an engine dataset'. Produced by 'ingest' and 'simulate'.",
+  "type": "object",
+  "required": [
+    "frames"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "description": "Free-form; ignored by the engine."
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "image_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "image_height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fov_deg": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 180
+        },
+        "fov_type": {
+          "enum": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "default": "horizontal"
+        },
+        "cx": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cy": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "image_width",
+        "image_height",
+        "fov_deg"
+      ],
+      "additionalProperties": false,
+      "description": "Default camera for every frame (a frame may override fields)."
+    },
+    "ground_truth": {
+      "type": "array",
+      "description": "Simulation only: true animal positions, used by --evaluate.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "truth_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          }
+        },
+        "required": [
+          "truth_id",
+          "label",
+          "latitude",
+          "longitude"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "latitude",
+          "longitude",
+          "altitude_agl_m",
+          "heading_deg"
+        ],
+        "properties": {
+          "frame_id": {
+            "type": "string",
+            "description": "Unique frame name, e.g. the image file name. Defaults to frame_00000..."
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "description": "Camera position, WGS84 degrees."
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          "altitude_agl_m": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Camera height above the ground plane (m)."
+          },
+          "heading_deg": {
+            "type": "number",
+            "description": "Gimbal yaw, clockwise from TRUE north (deg)."
+          },
+          "gimbal_pitch_deg": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180,
+            "default": -90,
+            "description": "0 = horizon, -90 = nadir."
+          },
+          "gimbal_roll_deg": {
+            "type": "number",
+            "default": 0
+          },
+          "camera": {
+            "type": "object",
+            "properties": {
+              "image_width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "image_height": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "fov_deg": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "exclusiveMaximum": 180
+              },
+              "fov_type": {
+                "enum": [
+                  "horizontal",
+                  "vertical",
+                  "diagonal"
+                ],
+                "default": "horizontal"
+              },
+              "cx": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cy": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "image_width",
+              "image_height",
+              "fov_deg"
+            ],
+            "additionalProperties": false,
+            "description": "Pinhole camera. fov_type says which field of view fov_deg describes."
+          },
+          "image_width": {
+            "type": "integer"
+          },
+          "image_height": {
+            "type": "integer"
+          },
+          "fov_deg": {
+            "type": "number"
+          },
+          "fov_type": {
+            "enum": [
+              "horizontal",
+              "vertical",
+              "diagonal"
+            ]
+          },
+          "cx": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cy": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "detections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "detection_id": {
+                  "type": "string"
+                },
+                "x": {
+                  "type": "number",
+                  "description": "Pixel column, origin top-left."
+                },
+                "y": {
+                  "type": "number",
+                  "description": "Pixel row, origin top-left."
+                },
+                "label": {
+                  "type": "string",
+                  "default": "animal"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1
+                },
+                "truth_id": {
+                  "type": "string",
+                  "description": "Simulation only."
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -15,7 +15,7 @@ from .geo import LocalUTM
 from .models import Dataset, Detection, Frame
 from .pipeline import PipelineResult, run_pipeline
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "AnimalRecord",

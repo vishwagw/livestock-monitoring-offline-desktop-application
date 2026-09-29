@@ -671,7 +671,10 @@ table.animals th button {
   color: var(--muted);
 }
 table.animals td {
-  padding: 5px 14px;
+  height: 27px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  white-space: nowrap;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 table.animals .num {
@@ -840,4 +843,9 @@ table.animals tbody tr.selected {
   margin: 0;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+
+.point-layer {
+  position: absolute;
+  pointer-events: none;
 }

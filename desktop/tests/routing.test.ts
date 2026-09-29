@@ -54,3 +54,26 @@ describe('progress time helpers', () => {
     expect(estimateRemaining(100, 10)).toBeNull()
   })
 })
+
+describe('point layer geometry', () => {
+  it('matches Leaflet Web Mercator and finds nearest points', async () => {
+    const { PointIndex, toMercatorUnit } = await import('../src/renderer/src/lib/mercator')
+    expect(toMercatorUnit(0, 0)).toEqual([0.5, 0.5])
+    const [u, v] = toMercatorUnit(-33.8688, 151.2093)
+    // EPSG:3857 reference (pyproj) at 256 px per world: (235.52661, 153.62362).
+    expect(u * 256).toBeCloseTo(235.52661, 4)
+    expect(v * 256).toBeCloseTo(153.62362, 4)
+    const pts = [[-33.8688, 151.2093], [-33.8689, 151.2093], [-33.9, 151.3]].map(([a, b]) => toMercatorUnit(a, b))
+    const index = new PointIndex(Float64Array.from(pts.map((p) => p[0])), Float64Array.from(pts.map((p) => p[1])))
+    const [qu, qv] = toMercatorUnit(-33.86889, 151.2093)
+    expect(index.nearest(qu, qv, 1e-6)).toBe(1)
+    expect(index.nearest(qu, qv, 1e-12)).toBe(-1)
+  })
+
+  it('renders only the visible slice of a long table', async () => {
+    const { visibleWindow, ROW_HEIGHT } = await import('../src/renderer/src/lib/virtual')
+    const w = visibleWindow(28000, 1000 * ROW_HEIGHT, 400)
+    expect(w.end - w.start).toBeLessThan(60)
+    expect(w.before + (w.end - w.start) * ROW_HEIGHT + w.after).toBe(28000 * ROW_HEIGHT)
+  })
+})
