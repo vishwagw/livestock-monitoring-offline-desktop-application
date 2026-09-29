@@ -59,7 +59,7 @@ def evaluate(result: PipelineResult, dataset: Dataset, match_radius_m: float = 2
     matched, errors = 0, []
     if len(pred_xy) and len(observed_xy):
         cost = cdist(pred_xy, observed_xy)
-        rows, cols = linear_sum_assignment(cost)
+        rows, cols = linear_sum_assignment(np.where(cost <= match_radius_m, cost, match_radius_m * 1e3))
         ok = cost[rows, cols] <= match_radius_m
         matched = int(ok.sum())
         errors = cost[rows, cols][ok].tolist()

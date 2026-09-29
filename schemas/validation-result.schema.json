@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livestock-counter.local/schemas/validation-result.schema.json",
+  "title": "Validation result ('validate --json')",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "predicted",
+    "truth",
+    "count_accuracy",
+    "count_error"
+  ],
+  "properties": {
+    "predicted": {
+      "type": "integer"
+    },
+    "truth": {
+      "type": "integer"
+    },
+    "count_accuracy": {
+      "type": "number"
+    },
+    "count_error": {
+      "type": "integer",
+      "description": "predicted - truth; negative = under-count"
+    },
+    "matched": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "precision": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "recall": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "f1": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "mean_position_error_m": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "p95_position_error_m": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "match_radius_m": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "per_class": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "truth": {
+            "type": "integer"
+          },
+          "predicted": {
+            "type": "integer"
+          },
+          "count_accuracy": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "truth",
+          "predicted",
+          "count_accuracy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "missed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "row": {
+            "type": "integer"
+          },
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          }
+        },
+        "required": [
+          "row",
+          "latitude",
+          "longitude"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "extra": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

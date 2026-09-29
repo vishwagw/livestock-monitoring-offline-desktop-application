@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from ..camera import CameraModel, FramePose
 from ..models import Dataset, Detection, Frame
+from ..progress import NullTracker, ProgressTracker
 from .detections import RawDetection, load_detections
 from .srt import load_srt
 from .telemetry import TelemetrySample, TelemetryTrack, frame_key
@@ -109,8 +111,12 @@ def _decimate(samples: list[TelemetrySample]) -> list[list[float]]:
 
 
 def build_dataset(
-    tracks: list[TelemetryTrack], detections: list[RawDetection], opts: IngestOptions
+    tracks: list[TelemetryTrack],
+    detections: list[RawDetection],
+    opts: IngestOptions,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[Dataset, IngestReport]:
+    """Join detections to telemetry. ``on_progress(done, total)`` is called periodically."""
     report = IngestReport(detections_in=len(detections))
     if not tracks:
         raise IngestError("at least one telemetry file (.SRT or telemetry CSV) is required")
@@ -130,7 +136,10 @@ def build_dataset(
 
     cam = opts.camera
     frames: dict[str, Frame] = {}
-    for det in detections:
+    total = len(detections)
+    for n_done, det in enumerate(detections, start=1):
+        if on_progress and n_done % 500 == 0:
+            on_progress(n_done, total)
         candidates = _resolve_tracks(det, tracks)
         if isinstance(candidates, str):
             report.unmatched[candidates] += 1
@@ -205,11 +214,55 @@ def ingest_files(
     detection_paths: list[str | Path],
     opts: IngestOptions,
     class_names: list[str] | None = None,
+    progress: ProgressTracker | NullTracker | None = None,
 ) -> tuple[Dataset, IngestReport]:
-    tracks = [load_telemetry(p) for p in telemetry_paths]
+    """Load raw logs and join them. Reports the ``read`` and ``match`` stages."""
+    progress = progress or NullTracker()
+    paths = [("telemetry", Path(p)) for p in telemetry_paths] + [("detections", Path(p)) for p in detection_paths]
+    sizes = [max(_size(p), 1) for _, p in paths]
+    total_bytes = sum(sizes) or 1
+
+    read = progress.stage("read")
+    tracks: list[TelemetryTrack] = []
     detections: list[RawDetection] = []
-    for p in detection_paths:
-        detections.extend(load_detections(p, class_names))
+    done_bytes = 0
+    for (kind, path), size in zip(paths, sizes):
+        read.update(done_bytes / total_bytes, f"Reading {path.name}")
+        if kind == "telemetry":
+            tracks.append(load_telemetry(path))
+        else:
+            detections.extend(load_detections(path, class_names))
+        done_bytes += size
+        read.update(
+            done_bytes / total_bytes,
+            f"Read {path.name}",
+            telemetry_samples=sum(len(t.samples) for t in tracks),
+            raw_detections=len(detections),
+        )
     if not detections:
         raise IngestError("no detections found in the bounding-box logs")
-    return build_dataset(tracks, detections, opts)
+    read.done(
+        f"Read {len(paths)} files: {sum(len(t.samples) for t in tracks)} telemetry samples, "
+        f"{len(detections)} detections"
+    )
+
+    match = progress.stage("match")
+    dataset, report = build_dataset(
+        tracks,
+        detections,
+        opts,
+        on_progress=lambda n, total: match.update(n / total, f"Matched {n} of {total} detections"),
+    )
+    match.done(
+        f"Matched {report.detections_matched} of {report.detections_in} detections to {report.frames} frames",
+        matched=report.detections_matched,
+        frames=report.frames,
+    )
+    return dataset, report
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

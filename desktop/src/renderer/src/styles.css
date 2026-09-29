@@ -671,7 +671,10 @@ table.animals th button {
   color: var(--muted);
 }
 table.animals td {
-  padding: 5px 14px;
+  height: 27px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  white-space: nowrap;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 table.animals .num {
@@ -748,4 +751,101 @@ table.animals tbody tr.selected {
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   color: var(--text);
   border-color: var(--text);
+}
+
+/* ---------- Processing dashboard ---------- */
+.progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.progress-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.progress-panel__percent {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.progress-panel__message {
+  margin: 0;
+  font-size: 12px;
+  min-height: 1.4em;
+}
+.stages {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.stage {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+.stage--pending {
+  color: var(--muted);
+}
+.stage--done .stage__icon {
+  color: var(--unique);
+  font-weight: 700;
+}
+.stage--active {
+  font-weight: 600;
+}
+.stage--active .stage__icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+.stage__pct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage--active .stage__icon {
+    animation: none;
+  }
+}
+.counters {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin: 4px 0;
+}
+.counters div {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.counters dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.counters dd {
+  margin: 0;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.point-layer {
+  position: absolute;
+  pointer-events: none;
 }

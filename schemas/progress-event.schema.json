@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livestock-counter.local/schemas/progress-event.schema.json",
+  "title": "Progress event ('process --progress', one JSON object per stdout line)",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "event": {
+          "const": "progress"
+        },
+        "stage": {
+          "enum": [
+            "read",
+            "match",
+            "georeference",
+            "cluster",
+            "align",
+            "report"
+          ]
+        },
+        "stage_label": {
+          "type": "string"
+        },
+        "stage_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stage_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stage_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Overall, never decreases."
+        },
+        "message": {
+          "type": "string"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "elapsed_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "event",
+        "stage",
+        "stage_label",
+        "stage_index",
+        "stage_count",
+        "stages",
+        "stage_percent",
+        "percent",
+        "message",
+        "counts",
+        "elapsed_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event": {
+          "const": "done"
+        },
+        "percent": {
+          "const": 100
+        },
+        "report": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "utm_epsg": {
+              "type": "integer"
+            },
+            "input_detections": {
+              "type": "integer"
+            },
+            "projected_detections": {
+              "type": "integer"
+            },
+            "rejected_detections": {
+              "type": "integer"
+            },
+            "unique_animals": {
+              "type": "integer"
+            },
+            "duplicates_removed": {
+              "type": "integer"
+            },
+            "duplicate_detections": {
+              "type": "integer"
+            },
+            "dbscan_clusters": {
+              "type": "integer"
+            },
+            "frame_exclusivity_splits": {
+              "type": "integer"
+            },
+            "frames": {
+              "type": "integer"
+            },
+            "label_counts": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "registration": {
+              "type": "object",
+              "required": [
+                "enabled"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "type": "integer"
+                },
+                "models": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  }
+                },
+                "mean_shift_m": {
+                  "type": "number"
+                },
+                "max_shift_m": {
+                  "type": "number"
+                },
+                "mean_abs_rotation_deg": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "density": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "enum": [
+                        "normal",
+                        "dense"
+                      ]
+                    },
+                    "spacing_m": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "eps_m": {
+                      "type": "number"
+                    },
+                    "eps_effective_m": {
+                      "type": "number"
+                    },
+                    "sync_pairs": {
+                      "type": "integer"
+                    },
+                    "sync_links": {
+                      "type": "integer"
+                    },
+                    "sync_residual_m": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "spacing_m",
+                    "eps_m",
+                    "eps_effective_m",
+                    "sync_pairs",
+                    "sync_links",
+                    "sync_residual_m"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "suppressed_duplicate_boxes": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "utm_epsg",
+            "input_detections",
+            "projected_detections",
+            "rejected_detections",
+            "unique_animals",
+            "duplicates_removed",
+            "duplicate_detections",
+            "dbscan_clusters",
+            "frame_exclusivity_splits",
+            "frames",
+            "label_counts",
+            "registration",
+            "density",
+            "suppressed_duplicate_boxes"
+          ],
+          "additionalProperties": false
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counts": {
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        },
+        "elapsed_s": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "event",
+        "percent",
+        "report",
+        "summary",
+        "stages",
+        "counts",
+        "message",
+        "elapsed_s"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event": {
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

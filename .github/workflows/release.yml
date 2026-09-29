@@ -1,0 +1,102 @@
+name: Release installers
+
+# Builds the standalone installers on each target OS. PyInstaller cannot
+# cross-compile, so every engine is frozen on the platform it ships for.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64 (.exe)
+            os: windows-latest
+            package: package:win
+            artifact: desktop/release/*.exe
+          - name: macOS Apple Silicon (.dmg)
+            os: macos-14
+            package: package:mac -- --arm64
+            artifact: desktop/release/*.dmg
+          - name: macOS Intel (.dmg)
+            os: macos-15-intel
+            package: package:mac -- --x64
+            artifact: desktop/release/*.dmg
+          - name: Linux x64 (.AppImage, .deb)
+            os: ubuntu-latest
+            package: package:linux
+            artifact: |
+              desktop/release/*.AppImage
+              desktop/release/*.deb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install pinned engine build dependencies
+        run: |
+          pip install -r requirements-build.txt
+          pip install --no-deps .
+
+      - name: Freeze engine and verify it runs with no Python on PATH
+        run: python packaging/build_engine.py
+
+      - name: Install app dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Test
+        working-directory: desktop
+        run: npm test
+
+      - name: Build installer
+        working-directory: desktop
+        env:
+          # Optional code signing; builds are unsigned (ad-hoc on macOS) without these.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run ${{ matrix.package }}
+
+      - name: Verify the packaged app offline, without Python (bundled engine)
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a npm run test:release; else npm run test:release; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

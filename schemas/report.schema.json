@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livestock-counter.local/schemas/report.schema.json",
+  "title": "Map report (output of 'process')",
+  "description": "Everything the desktop map shows. One record per unique animal and one per projected detection. status 'kept' = the highest-confidence sighting of an animal; 'duplicate' = a removed re-sighting.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "summary",
+    "bounds",
+    "animals",
+    "detections",
+    "rejected_detections",
+    "frames",
+    "flight_paths",
+    "warnings"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "utm_epsg": {
+          "type": "integer"
+        },
+        "input_detections": {
+          "type": "integer"
+        },
+        "projected_detections": {
+          "type": "integer"
+        },
+        "rejected_detections": {
+          "type": "integer"
+        },
+        "unique_animals": {
+          "type": "integer"
+        },
+        "duplicates_removed": {
+          "type": "integer"
+        },
+        "duplicate_detections": {
+          "type": "integer"
+        },
+        "dbscan_clusters": {
+          "type": "integer"
+        },
+        "frame_exclusivity_splits": {
+          "type": "integer"
+        },
+        "frames": {
+          "type": "integer"
+        },
+        "label_counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "registration": {
+          "type": "object",
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "frames": {
+              "type": "integer"
+            },
+            "models": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "mean_shift_m": {
+              "type": "number"
+            },
+            "max_shift_m": {
+              "type": "number"
+            },
+            "mean_abs_rotation_deg": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "density": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "normal",
+                    "dense"
+                  ]
+                },
+                "spacing_m": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "eps_m": {
+                  "type": "number"
+                },
+                "eps_effective_m": {
+                  "type": "number"
+                },
+                "sync_pairs": {
+                  "type": "integer"
+                },
+                "sync_links": {
+                  "type": "integer"
+                },
+                "sync_residual_m": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "mode",
+                "spacing_m",
+                "eps_m",
+                "eps_effective_m",
+                "sync_pairs",
+                "sync_links",
+                "sync_residual_m"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "suppressed_duplicate_boxes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "utm_epsg",
+        "input_detections",
+        "projected_detections",
+        "rejected_detections",
+        "unique_animals",
+        "duplicates_removed",
+        "duplicate_detections",
+        "dbscan_clusters",
+        "frame_exclusivity_splits",
+        "frames",
+        "label_counts",
+        "registration",
+        "density",
+        "suppressed_duplicate_boxes"
+      ],
+      "additionalProperties": false
+    },
+    "bounds": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      ],
+      "description": "[[south, west], [north, east]]"
+    },
+    "animals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "lon": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          "easting": {
+            "type": "number"
+          },
+          "northing": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "observations": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "frames": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "spread_m": {
+            "type": "number",
+            "minimum": 0
+          },
+          "class_conflict": {
+            "type": "boolean"
+          },
+          "label_votes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "lat",
+          "lon",
+          "easting",
+          "northing",
+          "label",
+          "confidence",
+          "observations",
+          "frames",
+          "spread_m",
+          "class_conflict",
+          "label_votes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "detections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "frame_id": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "lon": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          "raw_lat": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "raw_lon": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "animal_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "kept",
+              "duplicate",
+              "noise"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "frame_id",
+          "lat",
+          "lon",
+          "raw_lat",
+          "raw_lon",
+          "label",
+          "confidence",
+          "animal_id",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rejected_detections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Detection ids whose rays did not hit the ground."
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "lon": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          "altitude_agl_m": {
+            "type": "number"
+          },
+          "heading_deg": {
+            "type": "number"
+          },
+          "gimbal_pitch_deg": {
+            "type": "number"
+          },
+          "detections": {
+            "type": "integer"
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "lat",
+          "lon",
+          "altitude_agl_m",
+          "heading_deg",
+          "gimbal_pitch_deg",
+          "detections",
+          "timestamp"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "flight_paths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "coordinates": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "required": [
+          "name",
+          "coordinates"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ingest": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Raw-log ingestion statistics (absent for engine datasets)."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "description": "Simulation only: accuracy against ground truth."
+    }
+  }
+}

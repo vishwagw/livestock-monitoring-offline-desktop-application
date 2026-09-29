@@ -108,7 +108,9 @@ export function clustering(value: unknown): ClusteringSettings {
   return {
     epsM: num(o.epsM, 'cluster radius', 0.1, 50),
     registration: bool(o.registration, 'frame registration'),
-    frameExclusivity: bool(o.frameExclusivity, 'frame exclusivity')
+    frameExclusivity: bool(o.frameExclusivity, 'frame exclusivity'),
+    // Older saved settings predate this option: default to on.
+    adaptiveDensity: o.adaptiveDensity === undefined ? true : bool(o.adaptiveDensity, 'dense-group adaptation')
   }
 }
 

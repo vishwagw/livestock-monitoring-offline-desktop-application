@@ -1,0 +1,5 @@
+# Development / CI tooling on top of the runtime lock.
+-r requirements.lock
+pytest==9.1.1
+jsonschema==4.26.0
+pyflakes==4.0.0

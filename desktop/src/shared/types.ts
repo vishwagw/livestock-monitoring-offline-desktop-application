@@ -62,6 +62,8 @@ export interface ClusteringSettings {
   epsM: number
   registration: boolean
   frameExclusivity: boolean
+  /** Tighten eps and pre-align frames where animals stand closer than eps. */
+  adaptiveDensity: boolean
 }
 
 export interface RunRequest {
@@ -75,9 +77,19 @@ export interface RunRequest {
 
 export interface ProgressEvent {
   runId: string
+  /** Machine name of the current stage, e.g. `align`. */
   stage: string
+  stageIndex: number
+  /** Human-readable labels of every stage in this job, in order. */
+  stages: string[]
+  /** Progress within the current stage, 0-100. */
+  stagePercent: number
+  /** Overall progress, 0-100 (never decreases). */
   percent: number
   message: string
+  /** Live counters, e.g. detections matched, frames, animals found so far. */
+  counts: Record<string, number>
+  elapsedS: number
 }
 
 export interface ReportSummary {
@@ -90,6 +102,13 @@ export interface ReportSummary {
   duplicate_detections: number
   frames: number
   label_counts: Record<string, number>
+  density: {
+    mode: 'normal' | 'dense'
+    spacing_m: number | null
+    eps_m: number
+    eps_effective_m: number
+  } | null
+  suppressed_duplicate_boxes: number
   registration: {
     enabled: boolean
     frames?: number
@@ -166,10 +185,17 @@ export type RunResult =
 
 export type ExportKind = 'csv' | 'geojson' | 'report' | 'assignments'
 
+export type EngineKind = 'bundled' | 'python'
+
 export interface EngineStatus {
   ok: boolean
-  python: string | null
+  /** `bundled` = the self-contained binary shipped with the app. */
+  kind: EngineKind | null
+  /** Executable that was probed. */
+  command: string | null
   version: string | null
+  /** Python version inside the engine (bundled or system). */
+  python: string | null
   error: string | null
 }
 
@@ -202,7 +228,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     deriveHeading: true,
     classNames: ''
   },
-  clustering: { epsM: 2, registration: true, frameExclusivity: true }
+  clustering: { epsM: 2, registration: true, frameExclusivity: true, adaptiveDensity: true }
 }
 
 /** The API the preload script exposes on `window.livestock`. */

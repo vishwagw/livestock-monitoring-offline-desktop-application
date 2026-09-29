@@ -14,8 +14,65 @@ The repository contains:
   drag-and-drop of DJI `.SRT` / telemetry CSVs and AI bounding-box logs, and
   an offline map with green distinct animals and red removed duplicates.
   See [`desktop/README.md`](desktop/README.md).
+* **Phase 3 – standalone installers**: the engine is frozen with PyInstaller
+  and shipped inside the app, with a live processing dashboard. Installers
+  are `.exe` / `.dmg` / AppImage / `.deb` and need no Python, Node.js or network.
+* **Phase 4 – validation, performance and handover**:
+  - dense-group mode for sheep yards and feedlots;
+  - 50k–220k detection surveys processed in seconds;
+  - a validation tool for real flights;
+  - integration guides with JSON Schemas;
+  - reproducible build and source packages.
+
+## Documentation
+
+| Guide | For |
+| --- | --- |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | pilots using the app in the field |
+| [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) + [schemas/](schemas) | developers producing input files or consuming results |
+| [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | maintainers: architecture, setup, tests, extension points |
+| [docs/BUILD_AND_RELEASE.md](docs/BUILD_AND_RELEASE.md) | building signed installers per OS; release procedure |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | accuracy and speed validation results |
+| [docs/HANDOVER.md](docs/HANDOVER.md) | deliverables, IP and licensing, open items |
+| [desktop/README.md](desktop/README.md) | the Electron app's internals and security model |
+| [CHANGELOG.md](CHANGELOG.md) | release history |
 
 ![Desktop app: 1,195 raw detections from the sample flight collapse to a headcount of 150](docs/desktop-app.png)
+
+## Phase 4 at a glance
+
+| Sprint | Deliverable | Where |
+| --- | --- | --- |
+| 4.1 Stress testing | Full raw-log pipeline at 55k / 110k / 221k detections: 4.7 / 10.3 / 21.0 s, linear, 100% accurate (`livestock-engine stress`). Engine 2.8× faster at 55k; desktop map 16× faster at 221k (canvas point layers, virtualised table) | `dedup.py`, `desktop/src/renderer/src/lib/pointLayer.ts` |
+| 4.1 Tight animal groups | Dense-group mode: in-image spacing detection, clustering-free frame pre-alignment, adaptive ε, same-image double-box suppression. Sheep yards 0.6–0.9 m apart: 72–96% → **99.4–99.9%**, with no under-counting | `density.py`, `sync.py` |
+| 4.1 Real-flight validation | `livestock-engine validate` scores any report against surveyed positions or gate counts | `validation.py` |
+| 4.2 Integration guides | Input schemas, frame-matching rules, outputs, CLI, Python API. JSON Schemas are tested against real output; the docs are tested against the code | `docs/INTEGRATION_GUIDE.md`, `schemas/` |
+| 4.2 Handover package | Developer / build / pilot guides, pinned build environments, license inventory, reproducible source archive | `docs/`, `requirements*.txt`, `Makefile`, `packaging/` |
+
+## Phase 3 at a glance
+
+| Sprint | Deliverable | Where |
+| --- | --- | --- |
+| 3.1 IPC pipeline binding | Files admitted in the UI become opaque ids; **Run** sends validated settings over IPC, and the main process launches the engine on the registered paths | `desktop/src/main/ipc.ts`, `engine.ts` |
+| 3.1 Real-time progress | The engine reports 6 weighted stages (read → match → georeference → cluster → align → report) with per-frame and per-pass updates and live counters, throttled to 10 Hz and never going backwards; the dashboard shows a stage checklist, overall %, elapsed time and time remaining | `livestock_engine/progress.py`, `ProgressPanel.tsx` |
+| 3.2 PyInstaller engine | One-folder frozen `livestock-engine` (about 180 MB, 70 MB compressed; starts in about 1.5 s). The build script checks that it runs **with no Python on PATH** and counts the sample flight correctly | `packaging/` |
+| 3.2 electron-builder | NSIS `.exe` (Windows x64), `.dmg` (macOS arm64 and x64), AppImage/`.deb` (Linux). Maximum compression, Electron fuses on, UI served from `app://`, no update feed | `desktop/electron-builder.config.cjs` |
+| Milestone 3 | A CI release matrix builds each installer on its own OS, then launches the packaged app offline without Python and checks the headcount | `.github/workflows/release.yml`, `desktop/e2e/release-check.mjs` |
+
+![Processing dashboard](docs/processing-dashboard.png)
+
+Build an installer for the machine you're on:
+
+```bash
+pip install -e . pyinstaller
+python packaging/build_engine.py        # frozen engine -> desktop/resources/engine (self-tested)
+cd desktop && npm ci
+npm run package:win | package:mac | package:linux
+npm run test:release                    # launch the packaged app offline, no Python, and count the sample
+```
+
+Push a `v*` tag, or run the **Release installers** workflow, to build all
+platforms and attach them to a draft GitHub release.
 
 ## Phase 2 at a glance
 
@@ -44,9 +101,12 @@ cd desktop && npm install && npm run dev
 | Accuracy hardening | Frame-to-consensus registration that cancels per-frame telemetry error | `registration.py` |
 | Milestone 1 | CLI with a simulator and a benchmark that verifies ≥ 99 % accuracy | `simulate.py`, `metrics.py`, `cli.py` |
 
+`livestock-engine self-check` imports every native dependency and runs PROJ
+and DBSCAN once. The desktop app uses it to validate an engine before running it.
+
 ## Install
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.11. For exact, reproducible versions use `pip install -r requirements-dev.txt && pip install --no-deps -e .`
 
 ```bash
 pip install -e ".[dev]"
@@ -258,11 +318,19 @@ pytest
 Project layout:
 
 ```
+docs/                     user, integration, developer, build & release, performance, handover guides
+schemas/                  JSON Schemas of every input/output format (tested against real output)
 examples/sample-flight/   simulated raw logs (SRT, telemetry CSV, box CSV, truth)
+packaging/                PyInstaller spec + build_engine.py (freeze and self-test the engine)
+.github/workflows/        CI (tests, packaged E2E) and release (per-OS installers)
 desktop/                  Electron + React desktop app (Phase 2) – see desktop/README.md
 src/livestock_engine/
   ingest/          SRT / telemetry CSV / bounding-box parsers, telemetry join
   report.py        map-ready JSON report for the desktop app
+  progress.py      weighted, throttled stage progress (JSON events)
+  density.py       dense-group detection and adaptive cluster radius
+  sync.py          clustering-free frame pre-alignment (pairwise voting + pose graph)
+  validation.py    scoring reports against real ground truth
   camera.py        camera intrinsics (FOV → focal length) and frame pose
   geo.py           UTM zone selection, WGS84 ↔ UTM, grid convergence
   projection.py    rotation matrices, ray casting, inverse projection

@@ -16,6 +16,7 @@ import { DropZone } from './components/DropZone'
 import { FileList } from './components/FileList'
 import { Legend } from './components/Legend'
 import { MapView, type LayerVisibility } from './components/MapView'
+import { ProgressPanel } from './components/ProgressPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { StatsBar } from './components/StatsBar'
 import { canRun, routeFiles, type RoutedFile } from './lib/routing'
@@ -24,7 +25,7 @@ const api = window.livestock
 
 type Status =
   | { state: 'idle' }
-  | { state: 'running'; progress: ProgressEvent | null }
+  | { state: 'running'; progress: ProgressEvent | null; startedAt: number }
   | { state: 'done'; durationMs: number }
   | { state: 'error'; message: string }
 
@@ -42,6 +43,12 @@ const BoxIcon = (
     <path d="M3 19h6M15 5h6" strokeLinecap="round" />
   </svg>
 )
+
+function engineLabel(engine: EngineStatus): string {
+  return engine.kind === 'bundled'
+    ? `Engine ${engine.version} · built-in`
+    : `Engine ${engine.version} · Python ${engine.python ?? ''}`.trim()
+}
 
 export function App() {
   const [files, setFiles] = useState<RoutedFile[]>([])
@@ -67,7 +74,15 @@ export function App() {
     void api.getSettings().then(setSettings)
     void api.tileInfo().then(setTiles)
     void api.engineStatus().then(setEngine)
-    const off = api.onProgress((p) => setStatus((s) => (s.state === 'running' ? { state: 'running', progress: p } : s)))
+    const off = api.onProgress((p) =>
+      setStatus((s) => {
+        if (s.state !== 'running') return s
+        // Keep the stage list and counters if an event arrives without them.
+        const prev = s.progress
+        const stages = p.stages.length ? p.stages : (prev?.stages ?? [])
+        return { ...s, progress: { ...p, stages, counts: { ...prev?.counts, ...p.counts } } }
+      })
+    )
     // Dropping a file outside a drop zone must never navigate the window.
     const block = (e: DragEvent): void => e.preventDefault()
     window.addEventListener('dragover', block)
@@ -108,7 +123,7 @@ export function App() {
   const runnable = canRun(files)
 
   const run = async (): Promise<void> => {
-    setStatus({ state: 'running', progress: null })
+    setStatus({ state: 'running', progress: null, startedAt: Date.now() })
     setSelected(null)
     const result = await api.run({
       telemetryIds: files.filter((f) => f.role === 'telemetry').map((f) => f.id),
@@ -154,7 +169,6 @@ export function App() {
     [report]
   )
 
-  const progress = status.state === 'running' ? status.progress : null
 
   return (
     <div className="app">
@@ -178,9 +192,9 @@ export function App() {
               Clear
             </button>
           )}
-          <span className={`engine engine--${engine ? (engine.ok ? 'ok' : 'bad') : 'wait'}`} title={engine?.python ?? undefined}>
+          <span className={`engine engine--${engine ? (engine.ok ? 'ok' : 'bad') : 'wait'}`} title={engine?.command ?? undefined}>
             <span className="engine__dot" aria-hidden />
-            {engine ? (engine.ok ? `Engine ${engine.version}` : 'Engine unavailable') : 'Checking engine…'}
+            {engine ? (engine.ok ? engineLabel(engine) : 'Engine unavailable') : 'Checking engine…'}
           </span>
           {engine && !engine.ok && (
             <button type="button" className="link" onClick={async () => setEngine(await api.choosePython())}>
@@ -245,16 +259,8 @@ export function App() {
           <h2>
             <span className="step">3</span> Count
           </h2>
-          {running ? (
-            <>
-              <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress?.percent ?? 0}>
-                <div className="progress__bar" style={{ width: `${Math.max(3, progress?.percent ?? 3)}%` }} />
-              </div>
-              <p className="muted small">{progress?.message || 'Starting…'}</p>
-              <button type="button" className="button button--ghost" onClick={() => void api.cancel()}>
-                Cancel
-              </button>
-            </>
+          {status.state === 'running' ? (
+            <ProgressPanel progress={status.progress} startedAt={status.startedAt} onCancel={() => void api.cancel()} />
           ) : (
             <>
               <button

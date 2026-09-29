@@ -33,7 +33,11 @@ export function StatsBar({ report }: { report: Report | null }) {
           {s?.registration.enabled ? `${(s.registration.mean_shift_m ?? 0).toFixed(2)} m` : report ? 'off' : '—'}
         </span>
         <span className="stat__sub">
-          {s?.registration.enabled ? `mean correction · ${s.registration.frames} frames` : 'GPS / heading drift'}
+          {s?.density?.mode === 'dense'
+            ? `dense groups · ε ${s.density.eps_effective_m.toFixed(2)} m`
+            : s?.registration.enabled
+              ? `mean correction · ${s.registration.frames} frames`
+              : 'GPS / heading drift'}
         </span>
       </div>
     </section>

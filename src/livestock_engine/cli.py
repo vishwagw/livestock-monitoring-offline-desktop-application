@@ -31,8 +31,11 @@ from .io import (
 )
 from .camera import CameraModel
 from .ingest import INGEST_ERRORS, IngestOptions, ingest_files
+from .validation import ValidationError
 from .metrics import evaluate
+from .geo import LocalUTM
 from .pipeline import run_pipeline
+from .progress import PROCESS_DATASET_STAGES, PROCESS_RAW_STAGES, ProgressTracker
 from .registration import RegistrationConfig
 from .report import build_report
 from .simulate import PROFILES, export_raw_logs, profile_config, simulate_survey
@@ -51,6 +54,17 @@ def _add_dedup_options(p: argparse.ArgumentParser) -> None:
         "--drop-noise",
         action="store_true",
         help="with --min-samples > 1, discard DBSCAN noise points instead of keeping them",
+    )
+    g.add_argument(
+        "--no-adaptive-density",
+        action="store_true",
+        help="keep eps fixed even where animals stand closer together than eps (sheep yards, feedlots)",
+    )
+    g.add_argument(
+        "--frame-nms",
+        type=float,
+        default=0.25,
+        help="fold same-image boxes closer than this (m) into one animal; 0 disables (default: 0.25)",
     )
     g.add_argument(
         "--max-range",
@@ -84,6 +98,8 @@ def _dedup_config(args) -> DedupConfig:
         min_samples=args.min_samples,
         enforce_frame_exclusivity=not args.no_frame_exclusivity,
         drop_noise=args.drop_noise,
+        adaptive_density=not args.no_adaptive_density,
+        frame_nms_m=args.frame_nms,
     )
 
 
@@ -112,7 +128,7 @@ def cmd_dedup(args) -> int:
         if not dataset.ground_truth:
             print("error: --evaluate requires a dataset with ground_truth", file=sys.stderr)
             return 2
-        summary["evaluation"] = _rounded(evaluate(result, dataset, args.eps).as_dict())
+        summary["evaluation"] = _rounded(evaluate(result, dataset, _match_radius(result, args.eps)).as_dict())
 
     if args.summary_json:
         with open(args.summary_json, "w", encoding="utf-8") as fh:
@@ -163,7 +179,7 @@ def _add_ingest_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--no-derive-heading", action="store_true", help="do not derive missing headings from the GPS track")
 
 
-def _ingest(args):
+def _ingest(args, progress=None):
     if not args.telemetry or not args.detections:
         raise UsageError("raw input needs at least one --telemetry and one --detections file")
     opts = IngestOptions(
@@ -176,7 +192,7 @@ def _ingest(args):
         derive_heading=not args.no_derive_heading,
     )
     names = [n.strip() for n in args.class_names.split(",")] if args.class_names else None
-    return ingest_files(args.telemetry, args.detections, opts, names)
+    return ingest_files(args.telemetry, args.detections, opts, names, progress=progress)
 
 
 def cmd_ingest(args) -> int:
@@ -191,54 +207,43 @@ def cmd_ingest(args) -> int:
     return 0
 
 
-class _Progress:
-    def __init__(self, enabled: bool) -> None:
-        self.enabled = enabled
-        self.started = time.perf_counter()
-
-    def emit(self, event: str, **fields) -> None:
-        if not self.enabled:
-            return
-        payload = {"event": event, "elapsed_s": round(time.perf_counter() - self.started, 3), **fields}
-        print(json.dumps(payload), flush=True)
+def _emit(payload: dict) -> None:
+    print(json.dumps(payload), flush=True)
 
 
 def cmd_process(args) -> int:
-    progress = _Progress(args.progress)
-    progress.emit("progress", stage="ingest", percent=5, message="Reading flight files")
+    stages = PROCESS_DATASET_STAGES if args.dataset else PROCESS_RAW_STAGES
+    progress = ProgressTracker(stages, sink=_emit if args.progress else None)
+    started = time.perf_counter()
     warnings: list[str] = []
     if args.dataset:
         if args.telemetry or args.detections:
             raise UsageError("use either --dataset or raw --telemetry/--detections inputs, not both")
+        read = progress.stage("read", f"Reading {args.dataset}")
         dataset = load_dataset(args.dataset)
+        read.done(f"Read {len(dataset.frames)} frames, {dataset.n_detections} detections")
     else:
-        dataset, ingest_report = _ingest(args)
+        dataset, ingest_report = _ingest(args, progress)
         warnings.extend(ingest_report.warnings)
-        progress.emit(
-            "progress",
-            stage="ingest",
-            percent=30,
-            message=f"Matched {ingest_report.detections_matched} of {ingest_report.detections_in} detections "
-            f"to {ingest_report.frames} frames",
-        )
     if not dataset.frames or dataset.n_detections == 0:
         raise UsageError("no detections could be matched to telemetry; check the files and camera settings")
 
-    progress.emit("progress", stage="dedup", percent=40, message=f"Projecting {dataset.n_detections} detections")
     result = run_pipeline(
         dataset,
         _dedup_config(args),
         max_range_m=args.max_range,
         registration=_registration_config(args),
+        progress=progress,
     )
-    progress.emit("progress", stage="report", percent=85, message=f"Found {result.dedup.n_unique} unique animals")
 
+    report_stage = progress.stage("report", f"Building map report for {result.dedup.n_unique} animals")
     rejected = len(result.projection.rejected_detection_ids)
     if rejected:
         warnings.append(f"{rejected} detections did not intersect the ground and were ignored")
     report = build_report(dataset, result, warnings)
     if dataset.ground_truth and dataset.has_truth_labels:
-        report["evaluation"] = _rounded(evaluate(result, dataset, args.eps).as_dict())
+        report["evaluation"] = _rounded(evaluate(result, dataset, _match_radius(result, args.eps)).as_dict())
+    report_stage.update(0.5, "Writing results")
 
     _write_json(args.report, report)
     if args.output:
@@ -249,15 +254,60 @@ def cmd_process(args) -> int:
         write_assignments_csv(result, args.assignments)
     if args.dataset_out:
         save_dataset(dataset, args.dataset_out)
+    report_stage.done("Results written")
 
     summary = report["summary"]
-    progress.emit("done", percent=100, report=str(args.report), summary=summary)
-    if not args.progress:
+    if args.progress:
+        _emit(
+            {
+                "event": "done",
+                "percent": 100,
+                "stages": progress.labels,
+                "counts": progress.counts,
+                "message": f"Done: {summary['unique_animals']} animals",
+                "report": str(args.report),
+                "summary": summary,
+                "elapsed_s": round(time.perf_counter() - started, 3),
+            }
+        )
+    else:
         print(
             f"{summary['input_detections']} detections -> {summary['unique_animals']} unique animals "
             f"({summary['duplicate_detections']} duplicates removed); report: {args.report}"
         )
     return 0
+
+
+def cmd_self_check(args) -> int:
+    """Import every runtime dependency and report versions (used by the desktop app)."""
+    import platform
+
+    import pyproj
+    import scipy
+    import sklearn
+    from sklearn.cluster import DBSCAN
+
+    # Exercise the native pieces a frozen build could be missing: PROJ's
+    # database and the compiled clustering / linear-algebra extensions.
+    utm = LocalUTM(-33.87, 151.21)
+    easting, _ = utm.to_utm(151.21, -33.87)
+    labels = DBSCAN(eps=2.0, min_samples=1).fit_predict(np.array([[0.0, 0.0], [1.0, 0.0], [9.0, 9.0]]))
+    ok = abs(easting - 334_163) < 5_000 and len(set(labels.tolist())) == 2
+    info = {
+        "ok": bool(ok),
+        "version": __version__,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "python": platform.python_version(),
+        "executable": sys.executable,
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "sklearn": sklearn.__version__,
+        "pyproj": pyproj.__version__,
+        "proj": pyproj.proj_version_str,
+        "utm_epsg": utm.epsg,
+    }
+    print(json.dumps(info) if args.json else "\n".join(f"{k}: {v}" for k, v in info.items()))
+    return 0 if ok else 1
 
 
 def _write_json(path, payload) -> None:
@@ -315,28 +365,33 @@ def cmd_benchmark(args) -> int:
             if args.animals:
                 cfg = replace(cfg, n_animals=args.animals)
             dataset = simulate_survey(cfg)
+            started = time.perf_counter()
             result = run_pipeline(dataset, config, max_range_m=args.max_range, registration=registration)
-            ev = evaluate(result, dataset, config.eps_m)
-            rows.append((profile, cfg.seed, ev))
+            elapsed = time.perf_counter() - started
+            ev = evaluate(result, dataset, _match_radius(result, config.eps_m))
+            rows.append((profile, cfg.seed, ev, result.density, elapsed))
 
     header = (
         f"{'profile':<9} {'seed':>4} {'raw':>6} {'observed':>8} {'unique':>6} "
-        f"{'count_acc':>9} {'precision':>9} {'recall':>7} {'f1':>7} {'err_m':>6} {'merged':>6} {'split':>5}"
+        f"{'count_acc':>9} {'precision':>9} {'recall':>7} {'f1':>7} {'err_m':>6} {'merged':>6} {'split':>5} "
+        f"{'mode':>6} {'eps':>5} {'time_s':>6}"
     )
     print(header)
     print("-" * len(header))
-    for profile, seed, ev in rows:
+    for profile, seed, ev, density, elapsed in rows:
         print(
             f"{profile:<9} {seed:>4} {ev.raw_detections:>6} {ev.observed_animals:>8} "
             f"{ev.predicted_animals:>6} {ev.count_accuracy:>9.2%} {ev.precision:>9.2%} "
             f"{ev.recall:>7.2%} {ev.f1:>7.2%} {ev.mean_position_error_m:>6.2f} "
-            f"{ev.over_merged_clusters:>6} {ev.split_animals:>5}"
+            f"{ev.over_merged_clusters:>6} {ev.split_animals:>5} "
+            f"{density.mode if density else '-':>6} {density.eps_effective_m if density else config.eps_m:>5.2f} "
+            f"{elapsed:>6.2f}"
         )
     print("-" * len(header))
 
     ok = True
     for profile in profiles:
-        evs = [ev for p, _, ev in rows if p == profile]
+        evs = [ev for p, _, ev, _, _ in rows if p == profile]
         count_acc = float(np.mean([e.count_accuracy for e in evs]))
         f1 = float(np.mean([e.f1 for e in evs]))
         raw = sum(e.raw_detections for e in evs)
@@ -350,6 +405,121 @@ def cmd_benchmark(args) -> int:
             f"{'PASS' if passed else 'FAIL'} (threshold {args.threshold:.0%})"
         )
     return 0 if ok else 1
+
+
+def cmd_stress(args) -> int:
+    """Full production path (raw logs -> ingest -> pipeline -> report) at growing scale."""
+    import math as _math
+    import resource
+    import tempfile
+    from pathlib import Path
+
+    from .progress import PROCESS_RAW_STAGES
+
+    rows = []
+    for n_animals in args.animals:
+        # Keep the stock density of the base profile: scale the station area.
+        base = profile_config(args.profile, seed=args.seed)
+        k = _math.sqrt(n_animals / base.n_animals)
+        cfg = replace(
+            base,
+            n_animals=n_animals,
+            field_width_m=base.field_width_m * k,
+            field_height_m=base.field_height_m * k,
+            n_herds=max(1, round(base.n_herds * k * k)),
+            n_pens=max(1, round(base.n_pens * k * k)),
+        )
+        dataset = simulate_survey(cfg)
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = export_raw_logs(dataset, tmp)
+            timings: dict[str, float] = {}
+            marks: dict[str, float] = {}
+
+            def sink(event: dict) -> None:
+                marks.setdefault(event["stage"], event["elapsed_s"])
+                timings[event["stage"]] = event["elapsed_s"]
+
+            tracker = ProgressTracker(PROCESS_RAW_STAGES, sink=sink, min_interval_s=0)
+            started = time.perf_counter()
+            opts = IngestOptions(camera=CameraModel(cfg.image_width, cfg.image_height, cfg.fov_deg, cfg.fov_type))
+            ingested, _ = ingest_files([paths["srt"]], [paths["detections"]], opts, progress=tracker)
+            result = run_pipeline(ingested, _dedup_config(args), progress=tracker)
+            stage = tracker.stage("report")
+            report = build_report(ingested, result)
+            report_path = Path(tmp) / "report.json"
+            _write_json(report_path, report)
+            stage.done()
+            total = time.perf_counter() - started
+            report_mb = report_path.stat().st_size / 1024**2
+        truth = np.array([result.utm.to_utm(g["longitude"], g["latitude"]) for g in dataset.ground_truth])
+        observed = len({d.truth_id for f in dataset.frames for d in f.detections})
+        stage_s = {}
+        names = [st.name for st in PROCESS_RAW_STAGES]
+        for i, name in enumerate(names):
+            nxt = next((marks[n] for n in names[i + 1:] if n in marks), timings.get(name, 0.0))
+            stage_s[name] = max(0.0, nxt - marks.get(name, nxt))
+        rows.append(
+            {
+                "animals": n_animals,
+                "detections": dataset.n_detections,
+                "frames": len(dataset.frames),
+                "unique": result.dedup.n_unique,
+                "observed": observed,
+                "accuracy": 1 - abs(result.dedup.n_unique - observed) / observed,
+                "total_s": total,
+                "stages": stage_s,
+                "peak_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024,
+                "report_mb": report_mb,
+                "mode": result.density.mode if result.density else "-",
+                "truth_points": len(truth),
+            }
+        )
+        r = rows[-1]
+        print(
+            f"{r['animals']:>7} animals {r['detections']:>8} detections {r['frames']:>6} frames | "
+            f"{r['total_s']:6.1f} s ({r['detections'] / r['total_s']:,.0f} det/s) | "
+            + " ".join(f"{k}={v:.1f}" for k, v in r["stages"].items())
+            + f" | peak {r['peak_mb']:,.0f} MB | report {r['report_mb']:.1f} MB | "
+            f"{r['unique']}/{r['observed']} ({r['accuracy']:.2%}) {r['mode']}",
+            flush=True,
+        )
+    if args.json:
+        _write_json(args.json, rows)
+    worst = min(r["accuracy"] for r in rows)
+    return 0 if worst >= args.threshold else 1
+
+
+def cmd_validate(args) -> int:
+    from .validation import load_report, load_truth_points, parse_counts, validate_counts, validate_points
+
+    report = load_report(args.report)
+    if bool(args.truth) == bool(args.count):
+        raise UsageError("give exactly one of --truth (positions CSV) or --count (manual headcount)")
+    if args.truth:
+        result = validate_points(report, load_truth_points(args.truth), args.radius)
+    else:
+        result = validate_counts(report, parse_counts(args.count))
+
+    if args.json:
+        _write_json(args.json, result.as_dict())
+    sign = "+" if result.count_error > 0 else ""
+    print(f"Count        : {result.predicted} counted vs {result.truth} true ({sign}{result.count_error}), "
+          f"accuracy {result.count_accuracy:.2%}")
+    if result.matched is not None:
+        print(f"Matching     : {result.matched} matched within {result.match_radius_m:.2f} m | precision "
+              f"{result.precision:.2%} | recall {result.recall:.2%} | F1 {result.f1:.2%}")
+        if result.mean_position_error_m is not None:
+            print(f"Position     : mean error {result.mean_position_error_m:.2f} m, "
+                  f"95th percentile {result.p95_position_error_m:.2f} m")
+        print(f"Unmatched    : {len(result.missed)} true animals missed, {len(result.extra)} extra detections")
+    for label, score in result.per_class.items():
+        print(f"  {label:<12} {score.predicted} vs {score.truth} ({score.count_accuracy:.2%})")
+    return 0 if result.count_accuracy >= args.threshold else 1
+
+
+def _match_radius(result, eps: float) -> float:
+    """Score against truth within the radius actually used (tighter in dense groups)."""
+    return result.density.eps_effective_m if result.density else eps
 
 
 def _rounded(d: dict) -> dict:
@@ -427,6 +597,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-gimbal-yaw", action="store_true", help="omit gimbal yaw from the raw logs")
     p.set_defaults(func=cmd_simulate)
 
+    p = sub.add_parser("stress", help="time the full raw-log pipeline at growing survey sizes")
+    p.add_argument("--animals", type=int, nargs="+", default=[7000, 14000, 28000], help="herd sizes to run")
+    p.add_argument("--profile", default="stress", choices=sorted(PROFILES), help="base profile (default: stress)")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--threshold", type=float, default=0.99, help="required count accuracy (default: 0.99)")
+    p.add_argument("--json", help="also write the measurements to this JSON file")
+    _add_dedup_options(p)
+    p.set_defaults(func=cmd_stress)
+
+    p = sub.add_parser("validate", help="score a processed report against real-world ground truth")
+    p.add_argument("--report", required=True, help="report.json from 'process' or the desktop app's Report export")
+    p.add_argument("--truth", help="CSV of true animal positions (latitude, longitude[, label])")
+    p.add_argument("--count", help="manual headcount: 150, or per class: cattle=120,sheep=30")
+    p.add_argument("--radius", type=float, help="match radius in metres (default: the run's effective eps)")
+    p.add_argument("--threshold", type=float, default=0.99, help="exit 1 if count accuracy is below this")
+    p.add_argument("--json", help="also write the full result (incl. missed/extra animals) as JSON")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("self-check", help="verify the engine and its native dependencies load")
+    p.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    p.set_defaults(func=cmd_self_check)
+
     p = sub.add_parser("ingest", help="join raw telemetry and bounding-box logs into a dataset JSON")
     _add_ingest_options(p)
     p.add_argument("-o", "--output", required=True, help="dataset JSON to write")
@@ -471,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (DatasetError, UsageError, FileNotFoundError, *INGEST_ERRORS) as exc:
+    except (DatasetError, UsageError, ValidationError, FileNotFoundError, *INGEST_ERRORS) as exc:
         if getattr(args, "progress", False):
             print(json.dumps({"event": "error", "message": str(exc)}), flush=True)
         print(f"error: {exc}", file=sys.stderr)

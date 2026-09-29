@@ -1,29 +1,46 @@
 /**
- * Bridge to the Python spatial engine (`livestock_engine`).
+ * Bridge to the spatial engine (`livestock_engine`).
  *
- * The engine runs as a child process: `python -m livestock_engine process
- * ... --progress`. It prints one JSON event per line on stdout (progress,
- * done, error), which is relayed to the renderer. Arguments are passed as an
- * array (never through a shell) and only contain validated values and paths
- * from the file registry.
+ * The engine runs as a child process, either the bundled PyInstaller binary
+ * (`livestock-engine process ... --progress`) or, in development, Python
+ * (`python -m livestock_engine process ...`). It prints one JSON event per
+ * line on stdout (progress, done, error), which is relayed to the renderer.
+ * Arguments are passed as an array (never through a shell) and only contain
+ * validated values and paths from the file registry.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { delimiter, join } from 'node:path'
 
-import type { IngestedFile, RunRequest } from '@shared/types'
+import type { IngestedFile, ProgressEvent, RunRequest } from '@shared/types'
 
-export interface PythonCommand {
+export interface EngineCommand {
+  kind: 'bundled' | 'python'
   command: string
-  /** Leading arguments, e.g. `['-3']` for the Windows `py` launcher. */
+  /** Arguments placed before the engine sub-command. */
   args: string[]
+}
+
+export function bundledEngine(path: string): EngineCommand {
+  return { kind: 'bundled', command: path, args: [] }
+}
+
+/** `pyArgs` e.g. `['-3']` for the Windows `py` launcher. */
+export function pythonEngine(command: string, pyArgs: string[] = []): EngineCommand {
+  return { kind: 'python', command, args: [...pyArgs, '-m', 'livestock_engine'] }
 }
 
 export interface EngineEvent {
   event: 'progress' | 'done' | 'error'
   stage?: string
+  stage_label?: string
+  stage_index?: number
+  stages?: string[]
+  stage_percent?: number
   percent?: number
   message?: string
+  counts?: Record<string, number>
+  elapsed_s?: number
   report?: string
 }
 
@@ -39,7 +56,7 @@ export function buildProcessArgs(
   resolveFile: (id: string) => IngestedFile,
   runDir: string
 ): string[] {
-  const args = ['-m', 'livestock_engine', 'process', '--progress']
+  const args = ['process', '--progress']
   if (request.datasetId) {
     args.push('--dataset', resolveFile(request.datasetId).path)
   } else {
@@ -64,6 +81,7 @@ export function buildProcessArgs(
   args.push('--eps', String(clustering.epsM))
   if (!clustering.registration) args.push('--no-registration')
   if (!clustering.frameExclusivity) args.push('--no-frame-exclusivity')
+  if (!clustering.adaptiveDensity) args.push('--no-adaptive-density')
   args.push(
     '--report', join(runDir, ENGINE_OUTPUTS.report),
     '-o', join(runDir, ENGINE_OUTPUTS.csv),
@@ -85,10 +103,39 @@ export function parseEngineLine(line: string): EngineEvent | null {
   return null
 }
 
-export function engineEnv(engineSrc: string | null, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function engineEnv(
+  engine: EngineCommand,
+  engineSrc: string | null,
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' }
-  if (engineSrc) env.PYTHONPATH = base.PYTHONPATH ? `${engineSrc}${delimiter}${base.PYTHONPATH}` : engineSrc
+  if (engine.kind === 'bundled') {
+    // A frozen engine must not pick up a system Python's modules.
+    delete env.PYTHONPATH
+    delete env.PYTHONHOME
+  } else if (engineSrc) {
+    env.PYTHONPATH = base.PYTHONPATH ? `${engineSrc}${delimiter}${base.PYTHONPATH}` : engineSrc
+  }
   return env
+}
+
+/** Convert an engine progress line into the IPC event sent to the renderer. */
+export function toProgressEvent(runId: string, e: EngineEvent): ProgressEvent {
+  const stages = Array.isArray(e.stages) ? e.stages.map(String).slice(0, 20) : []
+  const counts: Record<string, number> = {}
+  for (const [k, v] of Object.entries(e.counts ?? {})) if (typeof v === 'number' && Number.isFinite(v)) counts[k] = v
+  const done = e.event === 'done'
+  return {
+    runId,
+    stage: done ? 'done' : String(e.stage ?? ''),
+    stageIndex: done ? stages.length : Number(e.stage_index ?? 0),
+    stages,
+    stagePercent: done ? 100 : Number(e.stage_percent ?? 0),
+    percent: Math.min(100, Math.max(0, Number(e.percent ?? 0))),
+    message: String(e.message ?? (done ? 'Done' : '')),
+    counts,
+    elapsedS: Number(e.elapsed_s ?? 0)
+  }
 }
 
 /** Split a stream into lines, buffering partial lines between chunks. */
@@ -120,7 +167,7 @@ export class EngineRunner {
   }
 
   run(
-    python: PythonCommand,
+    engine: EngineCommand,
     args: string[],
     options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number },
     onEvent: (event: EngineEvent) => void
@@ -130,7 +177,7 @@ export class EngineRunner {
     return new Promise((resolvePromise) => {
       let stderr = ''
       let lastError: string | null = null
-      const child = spawn(python.command, [...python.args, ...args], {
+      const child = spawn(engine.command, [...engine.args, ...args], {
         cwd: options.cwd,
         env: options.env,
         shell: false,

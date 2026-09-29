@@ -183,6 +183,11 @@ export function SettingsPanel({ settings, disabled, rawMode, onChange }: Props) 
             onChange={(e) => setClustering({ frameExclusivity: e.target.checked })} />
           Never merge two animals seen in the same image
         </label>
+        <label className="check">
+          <input type="checkbox" checked={clustering.adaptiveDensity}
+            onChange={(e) => setClustering({ adaptiveDensity: e.target.checked })} />
+          Adapt to tightly packed animals (sheep yards, feedlots)
+        </label>
       </fieldset>
     </div>
   )
