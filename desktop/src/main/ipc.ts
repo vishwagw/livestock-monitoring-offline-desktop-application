@@ -14,9 +14,18 @@ import {
   type RunResult,
   type TileInfo
 } from '@shared/types'
-import { buildProcessArgs, engineEnv, ENGINE_OUTPUTS, EngineRunner, summariseStderr, type PythonCommand } from './engine'
+import {
+  buildProcessArgs,
+  engineEnv,
+  ENGINE_OUTPUTS,
+  EngineRunner,
+  pythonEngine,
+  summariseStderr,
+  toProgressEvent,
+  type EngineCommand
+} from './engine'
 import { FileRegistry } from './files'
-import { candidatePythons, findPython, probePython } from './python'
+import { candidateEngines, findEngine, probeEngine } from './python'
 import { SettingsStore } from './settings'
 import { scanTileCache } from './tiles'
 import * as validate from './validation'
@@ -28,6 +37,9 @@ export interface IpcContext {
   settings: SettingsStore
   userData: string
   engineSrc: string | null
+  /** Folder holding the bundled engine binary (packaged builds). */
+  bundledEngineDir: string | null
+  packaged: boolean
   repoRoot: string | null
   isTrustedUrl: (url: string) => boolean
   onTileCacheChanged: (info: TileInfo) => void
@@ -55,7 +67,7 @@ const EXPORTS: Record<ExportKind, { file: string; label: string; ext: string }> 
 export function registerIpc(ctx: IpcContext): void {
   const registry = new FileRegistry()
   const runner = new EngineRunner()
-  let python: PythonCommand | null = null
+  let engine: EngineCommand | null = null
   let status: EngineStatus | null = null
   let lastRunDir: string | null = null
 
@@ -71,16 +83,19 @@ export function registerIpc(ctx: IpcContext): void {
   async function resolveEngine(force = false): Promise<EngineStatus> {
     if (status && !force) return status
     const settings = ctx.settings.get()
-    const found = await findPython(
-      candidatePythons({
-        configured: settings.pythonPath,
-        envOverride: process.env.LIVESTOCK_ENGINE_PYTHON,
+    const found = await findEngine(
+      candidateEngines({
+        packaged: ctx.packaged,
+        bundledDir: ctx.bundledEngineDir,
+        envBinary: process.env.LIVESTOCK_ENGINE_BIN,
+        configuredPython: settings.pythonPath,
+        envPython: process.env.LIVESTOCK_ENGINE_PYTHON,
         repoRoot: ctx.repoRoot,
         platform: process.platform
       }),
       ctx.engineSrc
     )
-    python = found.command
+    engine = found.engine
     status = found.status
     return status
   }
@@ -112,11 +127,11 @@ export function registerIpc(ctx: IpcContext): void {
     const options: OpenDialogOptions = { title: 'Choose Python interpreter', properties: ['openFile'] }
     const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (picked.canceled || !picked.filePaths[0]) return resolveEngine()
-    const candidate: PythonCommand = { command: picked.filePaths[0], args: [] }
-    const probed = await probePython(candidate, ctx.engineSrc)
+    const candidate = pythonEngine(picked.filePaths[0])
+    const probed = await probeEngine(candidate, ctx.engineSrc)
     if (probed.ok) {
       await ctx.settings.update({ pythonPath: candidate.command })
-      python = candidate
+      engine = candidate
       status = probed
     }
     return probed
@@ -131,10 +146,11 @@ export function registerIpc(ctx: IpcContext): void {
       return { ok: false, runId, error: (err as Error).message }
     }
     if (runner.busy) return { ok: false, runId, error: 'processing is already running' }
-    const engine = await resolveEngine(!python)
-    if (!engine.ok || !python) {
-      return { ok: false, runId, error: `Processing engine unavailable: ${engine.error ?? 'unknown error'}` }
+    const engineStatus = await resolveEngine(!engine)
+    if (!engineStatus.ok || !engine) {
+      return { ok: false, runId, error: `Processing engine unavailable: ${engineStatus.error ?? 'unknown error'}` }
     }
+    const runEngine = engine
 
     const runsDir = join(ctx.userData, 'runs')
     const runDir = join(runsDir, runId)
@@ -147,19 +163,17 @@ export function registerIpc(ctx: IpcContext): void {
       return { ok: false, runId, error: (err as Error).message }
     }
 
-    const send = (p: Omit<ProgressEvent, 'runId'>): void => {
-      if (!event.sender.isDestroyed()) event.sender.send(IPC.progress, { runId, ...p })
+    const send = (p: ProgressEvent): void => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC.progress, p)
     }
-    send({ stage: 'start', percent: 1, message: 'Starting processing engine' })
+    send(toProgressEvent(runId, { event: 'progress', stage: 'start', percent: 0, message: 'Starting processing engine' }))
     const started = Date.now()
     const outcome = await runner.run(
-      python,
+      runEngine,
       args,
-      { cwd: runDir, env: engineEnv(ctx.engineSrc), timeoutMs: RUN_TIMEOUT_MS },
+      { cwd: runDir, env: engineEnv(runEngine, ctx.engineSrc), timeoutMs: RUN_TIMEOUT_MS },
       (e) => {
-        if (e.event === 'progress' || e.event === 'done') {
-          send({ stage: e.stage ?? e.event, percent: e.percent ?? 0, message: e.message ?? '' })
-        }
+        if (e.event === 'progress' || e.event === 'done') send(toProgressEvent(runId, e))
       }
     )
 

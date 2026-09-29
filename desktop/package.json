@@ -1,7 +1,7 @@
 {
   "name": "livestock-counter-desktop",
   "productName": "Livestock Counter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Offline desktop app that de-duplicates livestock counts from overlapping drone flights.",
   "main": "out/main/index.js",
   "private": true,
@@ -12,14 +12,15 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "package": "electron-vite build && electron-builder",
+    "package": "electron-vite build && electron-builder --config electron-builder.config.cjs",
     "seed-tiles": "node scripts/seed-tiles.mjs",
-    "test:e2e": "node e2e/smoke.mjs"
-  },
-  "dependencies": {
-    "leaflet": "^1.9.4",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "test:e2e": "node e2e/smoke.mjs",
+    "build:engine": "python3 ../packaging/build_engine.py",
+    "package:win": "electron-vite build && electron-builder --config electron-builder.config.cjs --win",
+    "package:mac": "electron-vite build && electron-builder --config electron-builder.config.cjs --mac",
+    "package:linux": "electron-vite build && electron-builder --config electron-builder.config.cjs --linux",
+    "package:dir": "electron-vite build && electron-builder --config electron-builder.config.cjs --dir",
+    "test:release": "node e2e/release-check.mjs release"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.22",
@@ -30,44 +31,19 @@
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "leaflet": "^1.9.4",
     "playwright": "^1.56.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vitest": "^5.0.2"
   },
-  "build": {
-    "appId": "com.livestockcounter.desktop",
-    "productName": "Livestock Counter",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "out/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "../src/livestock_engine",
-        "to": "engine/livestock_engine",
-        "filter": [
-          "**/*.py"
-        ]
-      }
-    ],
-    "asar": true,
-    "mac": {
-      "target": "dmg",
-      "category": "public.app-category.productivity"
-    },
-    "win": {
-      "target": "nsis"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Science"
-    }
-  }
+  "author": "Livestock Counter",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vishwagw/livestock-monitoring-offline-desktop-application.git"
+  },
+  "homepage": "https://github.com/vishwagw/livestock-monitoring-offline-desktop-application",
+  "desktopName": "livestock-counter.desktop"
 }

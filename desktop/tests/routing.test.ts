@@ -42,3 +42,15 @@ describe('canRun', () => {
     expect(canRun([{ ...f('s', 'dataset'), role: 'dataset' }]).ok).toBe(true)
   })
 })
+
+describe('progress time helpers', () => {
+  it('formats durations and estimates remaining time', async () => {
+    const { estimateRemaining, formatDuration } = await import('../src/renderer/src/lib/format')
+    expect(formatDuration(12.4)).toBe('12 s')
+    expect(formatDuration(125)).toBe('2 min 5 s')
+    expect(formatDuration(-1)).toBe('—')
+    expect(estimateRemaining(50, 10)).toBe(10)
+    expect(estimateRemaining(5, 10)).toBeNull() // too early to be meaningful
+    expect(estimateRemaining(100, 10)).toBeNull()
+  })
+})

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Engine (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest
+      - name: Milestone 1 accuracy gate
+        run: livestock-engine benchmark --runs 5 --profile standard --profile oblique --profile dense --profile harsh
+
+  desktop:
+    name: Desktop app (unit + packaged end-to-end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: pip install -e . pyinstaller
+      - name: Freeze engine (PyInstaller) and smoke-test it without Python
+        run: python packaging/build_engine.py
+      - working-directory: desktop
+        run: npm ci
+      - working-directory: desktop
+        run: npm run typecheck
+      - working-directory: desktop
+        run: npm test
+      - name: Package (unpacked, test build) and run the end-to-end test with no Python on PATH
+        working-directory: desktop
+        env:
+          LIVESTOCK_TEST_BUILD: "1"
+        run: |
+          npm run package:dir
+          E2E_APP=release/linux-unpacked/livestock-counter E2E_NO_PYTHON=1 xvfb-run -a npm run test:e2e
+      - name: Package the hardened release build (Electron fuses on) and verify it offline without Python
+        working-directory: desktop
+        run: |
+          rm -rf release
+          npm run package:dir
+          xvfb-run -a npm run test:release

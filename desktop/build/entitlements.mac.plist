@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Electron's V8 JIT -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- The PyInstaller engine loads its bundled Python extension modules
+         (numpy, scipy, scikit-learn, pyproj), which are signed with the app
+         identity but not by Apple. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

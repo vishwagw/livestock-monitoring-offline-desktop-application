@@ -75,9 +75,19 @@ export interface RunRequest {
 
 export interface ProgressEvent {
   runId: string
+  /** Machine name of the current stage, e.g. `align`. */
   stage: string
+  stageIndex: number
+  /** Human-readable labels of every stage in this job, in order. */
+  stages: string[]
+  /** Progress within the current stage, 0-100. */
+  stagePercent: number
+  /** Overall progress, 0-100 (never decreases). */
   percent: number
   message: string
+  /** Live counters, e.g. detections matched, frames, animals found so far. */
+  counts: Record<string, number>
+  elapsedS: number
 }
 
 export interface ReportSummary {
@@ -166,10 +176,17 @@ export type RunResult =
 
 export type ExportKind = 'csv' | 'geojson' | 'report' | 'assignments'
 
+export type EngineKind = 'bundled' | 'python'
+
 export interface EngineStatus {
   ok: boolean
-  python: string | null
+  /** `bundled` = the self-contained binary shipped with the app. */
+  kind: EngineKind | null
+  /** Executable that was probed. */
+  command: string | null
   version: string | null
+  /** Python version inside the engine (bundled or system). */
+  python: string | null
   error: string | null
 }
 

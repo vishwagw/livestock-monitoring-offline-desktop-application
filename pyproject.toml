@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livestock-engine"
-version = "0.2.0"
+version = "0.3.0"
 description = "Offline spatial engine that de-duplicates livestock detections from overlapping drone imagery."
 readme = "README.md"
 requires-python = ">=3.10"

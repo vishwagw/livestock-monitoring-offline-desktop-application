@@ -10,6 +10,7 @@ from .dedup import DedupConfig, DedupResult, GroundDetections, deduplicate
 from .geo import LocalUTM
 from .models import Dataset, Frame
 from .projection import camera_rotation, cast_to_ground
+from .progress import NullTracker, ProgressTracker
 from .registration import FrameCorrection, RegistrationConfig, register_frames
 
 
@@ -99,12 +100,16 @@ def run_pipeline(
     config: DedupConfig | None = None,
     max_range_m: float = 1000.0,
     registration: RegistrationConfig | None = RegistrationConfig(),
+    progress: ProgressTracker | NullTracker | None = None,
 ) -> PipelineResult:
     """Project, (optionally) register and de-duplicate a dataset.
 
     Pass ``registration=None`` to cluster the raw projections directly.
+    ``progress`` receives the ``georeference``, ``cluster`` and ``align``
+    stages.
     """
     config = config or DedupConfig()
+    progress = progress or NullTracker()
     if not dataset.frames:
         raise ValueError("dataset contains no frames")
 
@@ -117,9 +122,10 @@ def run_pipeline(
     frame_ids, labels, det_ids, truth_ids = [], [], [], []
     stats = ProjectionStats()
 
-    for frame in dataset.frames:
-        if not frame.detections:
-            continue
+    georef = progress.stage("georeference")
+    frames_with_detections = [f for f in dataset.frames if f.detections]
+    n_frames = len(frames_with_detections)
+    for k, frame in enumerate(frames_with_detections, start=1):
         points, valid = project_frame(frame, utm, max_range_m=max_range_m)
         for j, det in enumerate(frame.detections):
             stats.n_detections += 1
@@ -134,7 +140,13 @@ def run_pipeline(
             labels.append(det.label)
             det_ids.append(det_id)
             truth_ids.append(det.truth_id)
+        georef.update(k / n_frames, f"Georeferenced frame {k} of {n_frames}", detections=len(eastings))
     stats.n_projected = len(eastings)
+    georef.done(
+        f"Georeferenced {stats.n_projected} detections in {n_frames} frames",
+        detections=stats.n_projected,
+        rejected=len(stats.rejected_detection_ids),
+    )
 
     ground = GroundDetections(
         easting=np.asarray(eastings, dtype=float),
@@ -147,10 +159,24 @@ def run_pipeline(
     )
     raw_ground = ground
     corrections: dict[str, FrameCorrection] = {}
+    cluster = progress.stage("cluster", f"Clustering {len(ground)} sightings (eps {config.eps_m} m)")
+    align = None
+
+    def on_step(step: int, total: int, result: DedupResult) -> None:
+        nonlocal align
+        if step == 0:
+            cluster.done(f"First pass: {result.n_unique} candidate animals", animals=result.n_unique)
+            align = progress.stage("align")
+            return
+        align.update(step / total, f"Alignment pass {step} of {total}: {result.n_unique} animals", animals=result.n_unique)
+
     if registration is not None and registration.iterations > 0 and len(ground):
-        ground, dedup, corrections = register_frames(ground, config, registration)
+        ground, dedup, corrections = register_frames(ground, config, registration, on_step=on_step)
+        align.done(f"Aligned {len(corrections)} frames: {dedup.n_unique} animals", animals=dedup.n_unique)
     else:
         dedup = deduplicate(ground, config)
+        cluster.done(f"{dedup.n_unique} animals", animals=dedup.n_unique)
+        progress.stage("align").done("Frame alignment skipped", animals=dedup.n_unique)
 
     if dedup.animals:
         lon, lat = utm.to_geographic(

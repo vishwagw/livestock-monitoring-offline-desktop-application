@@ -32,7 +32,9 @@ from .io import (
 from .camera import CameraModel
 from .ingest import INGEST_ERRORS, IngestOptions, ingest_files
 from .metrics import evaluate
+from .geo import LocalUTM
 from .pipeline import run_pipeline
+from .progress import PROCESS_DATASET_STAGES, PROCESS_RAW_STAGES, ProgressTracker
 from .registration import RegistrationConfig
 from .report import build_report
 from .simulate import PROFILES, export_raw_logs, profile_config, simulate_survey
@@ -163,7 +165,7 @@ def _add_ingest_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--no-derive-heading", action="store_true", help="do not derive missing headings from the GPS track")
 
 
-def _ingest(args):
+def _ingest(args, progress=None):
     if not args.telemetry or not args.detections:
         raise UsageError("raw input needs at least one --telemetry and one --detections file")
     opts = IngestOptions(
@@ -176,7 +178,7 @@ def _ingest(args):
         derive_heading=not args.no_derive_heading,
     )
     names = [n.strip() for n in args.class_names.split(",")] if args.class_names else None
-    return ingest_files(args.telemetry, args.detections, opts, names)
+    return ingest_files(args.telemetry, args.detections, opts, names, progress=progress)
 
 
 def cmd_ingest(args) -> int:
@@ -191,54 +193,43 @@ def cmd_ingest(args) -> int:
     return 0
 
 
-class _Progress:
-    def __init__(self, enabled: bool) -> None:
-        self.enabled = enabled
-        self.started = time.perf_counter()
-
-    def emit(self, event: str, **fields) -> None:
-        if not self.enabled:
-            return
-        payload = {"event": event, "elapsed_s": round(time.perf_counter() - self.started, 3), **fields}
-        print(json.dumps(payload), flush=True)
+def _emit(payload: dict) -> None:
+    print(json.dumps(payload), flush=True)
 
 
 def cmd_process(args) -> int:
-    progress = _Progress(args.progress)
-    progress.emit("progress", stage="ingest", percent=5, message="Reading flight files")
+    stages = PROCESS_DATASET_STAGES if args.dataset else PROCESS_RAW_STAGES
+    progress = ProgressTracker(stages, sink=_emit if args.progress else None)
+    started = time.perf_counter()
     warnings: list[str] = []
     if args.dataset:
         if args.telemetry or args.detections:
             raise UsageError("use either --dataset or raw --telemetry/--detections inputs, not both")
+        read = progress.stage("read", f"Reading {args.dataset}")
         dataset = load_dataset(args.dataset)
+        read.done(f"Read {len(dataset.frames)} frames, {dataset.n_detections} detections")
     else:
-        dataset, ingest_report = _ingest(args)
+        dataset, ingest_report = _ingest(args, progress)
         warnings.extend(ingest_report.warnings)
-        progress.emit(
-            "progress",
-            stage="ingest",
-            percent=30,
-            message=f"Matched {ingest_report.detections_matched} of {ingest_report.detections_in} detections "
-            f"to {ingest_report.frames} frames",
-        )
     if not dataset.frames or dataset.n_detections == 0:
         raise UsageError("no detections could be matched to telemetry; check the files and camera settings")
 
-    progress.emit("progress", stage="dedup", percent=40, message=f"Projecting {dataset.n_detections} detections")
     result = run_pipeline(
         dataset,
         _dedup_config(args),
         max_range_m=args.max_range,
         registration=_registration_config(args),
+        progress=progress,
     )
-    progress.emit("progress", stage="report", percent=85, message=f"Found {result.dedup.n_unique} unique animals")
 
+    report_stage = progress.stage("report", f"Building map report for {result.dedup.n_unique} animals")
     rejected = len(result.projection.rejected_detection_ids)
     if rejected:
         warnings.append(f"{rejected} detections did not intersect the ground and were ignored")
     report = build_report(dataset, result, warnings)
     if dataset.ground_truth and dataset.has_truth_labels:
         report["evaluation"] = _rounded(evaluate(result, dataset, args.eps).as_dict())
+    report_stage.update(0.5, "Writing results")
 
     _write_json(args.report, report)
     if args.output:
@@ -249,15 +240,60 @@ def cmd_process(args) -> int:
         write_assignments_csv(result, args.assignments)
     if args.dataset_out:
         save_dataset(dataset, args.dataset_out)
+    report_stage.done("Results written")
 
     summary = report["summary"]
-    progress.emit("done", percent=100, report=str(args.report), summary=summary)
-    if not args.progress:
+    if args.progress:
+        _emit(
+            {
+                "event": "done",
+                "percent": 100,
+                "stages": progress.labels,
+                "counts": progress.counts,
+                "message": f"Done: {summary['unique_animals']} animals",
+                "report": str(args.report),
+                "summary": summary,
+                "elapsed_s": round(time.perf_counter() - started, 3),
+            }
+        )
+    else:
         print(
             f"{summary['input_detections']} detections -> {summary['unique_animals']} unique animals "
             f"({summary['duplicate_detections']} duplicates removed); report: {args.report}"
         )
     return 0
+
+
+def cmd_self_check(args) -> int:
+    """Import every runtime dependency and report versions (used by the desktop app)."""
+    import platform
+
+    import pyproj
+    import scipy
+    import sklearn
+    from sklearn.cluster import DBSCAN
+
+    # Exercise the native pieces a frozen build could be missing: PROJ's
+    # database and the compiled clustering / linear-algebra extensions.
+    utm = LocalUTM(-33.87, 151.21)
+    easting, _ = utm.to_utm(151.21, -33.87)
+    labels = DBSCAN(eps=2.0, min_samples=1).fit_predict(np.array([[0.0, 0.0], [1.0, 0.0], [9.0, 9.0]]))
+    ok = abs(easting - 334_163) < 5_000 and len(set(labels.tolist())) == 2
+    info = {
+        "ok": bool(ok),
+        "version": __version__,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "python": platform.python_version(),
+        "executable": sys.executable,
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "sklearn": sklearn.__version__,
+        "pyproj": pyproj.__version__,
+        "proj": pyproj.proj_version_str,
+        "utm_epsg": utm.epsg,
+    }
+    print(json.dumps(info) if args.json else "\n".join(f"{k}: {v}" for k, v in info.items()))
+    return 0 if ok else 1
 
 
 def _write_json(path, payload) -> None:
@@ -426,6 +462,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--no-gimbal-yaw", action="store_true", help="omit gimbal yaw from the raw logs")
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("self-check", help="verify the engine and its native dependencies load")
+    p.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    p.set_defaults(func=cmd_self_check)
 
     p = sub.add_parser("ingest", help="join raw telemetry and bounding-box logs into a dataset JSON")
     _add_ingest_options(p)

@@ -6,6 +6,11 @@
  * posture. Native dialogs are stubbed; everything else is real.
  *
  *   npm run build && npm run test:e2e        (Linux CI: xvfb-run -a npm run test:e2e)
+ *
+ * To test an installed/packaged app instead of the out/ build:
+ *   E2E_APP=release/linux-unpacked/livestock-counter E2E_NO_PYTHON=1 npm run test:e2e
+ * E2E_NO_PYTHON strips Python from PATH, proving the bundled engine is used.
+ * (Package with LIVESTOCK_TEST_BUILD=1: release fuses disable the inspector.)
  */
 
 import assert from 'node:assert/strict'
@@ -79,18 +84,28 @@ const userData = mkdtempSync(join(tmpdir(), 'livestock-e2e-'))
 const tiles = join(userData, 'tiles')
 makeTileCache(tiles)
 
+const packagedApp = process.env.E2E_APP ? resolve(appDir, process.env.E2E_APP) : null
+const env = { ...process.env }
+if (process.env.E2E_NO_PYTHON === '1') {
+  env.PATH = process.platform === 'win32' ? `${process.env.SystemRoot}\\System32` : '/nonexistent'
+  delete env.PYTHONPATH
+  delete env.LIVESTOCK_ENGINE_PYTHON
+}
 const app = await electron.launch({
-  executablePath: require('electron'),
-  args: [join(appDir, 'out/main/index.js'), '--no-sandbox', `--user-data-dir=${userData}`],
-  cwd: appDir
+  executablePath: packagedApp ?? require('electron'),
+  args: [...(packagedApp ? [] : [join(appDir, 'out/main/index.js')]), '--no-sandbox', `--user-data-dir=${userData}`],
+  cwd: appDir,
+  env
 })
 const step = (msg) => console.log(`  ✓ ${msg}`)
 
 try {
   const page = await app.firstWindow()
   await page.waitForSelector('.engine--ok, .engine--bad', { timeout: 60_000 })
-  assert.match(await page.textContent('.engine'), /^Engine /, 'the Python engine must be available')
-  step('engine detected')
+  const engineLabel = await page.textContent('.engine')
+  assert.match(engineLabel, /^Engine /, 'the processing engine must be available')
+  if (packagedApp) assert.match(engineLabel, /built-in/, 'a packaged app must use its bundled engine')
+  step(`engine detected: ${engineLabel}`)
 
   const security = await page.evaluate(async () => {
     let network = 'blocked'
@@ -129,8 +144,20 @@ try {
   await page.waitForSelector('text=cached')
   step('offline tile cache selected')
 
+  // Record the live progress stream exactly as the dashboard receives it.
+  await page.evaluate(() => {
+    window.__progress = []
+    window.livestock.onProgress((e) => window.__progress.push(e))
+  })
   await page.getByRole('button', { name: /Remove duplicates/ }).click()
   await page.waitForSelector('.success', { timeout: 120_000 })
+  const events = await page.evaluate(() => window.__progress)
+  const staged = events.filter((e) => e.stages.length)
+  assert.ok(staged.length >= 6, `expected a stream of staged progress events, got ${events.length}`)
+  assert.equal(staged[0].stages.length, 6, 'the engine announces all 6 stages')
+  assert.deepEqual(events.map((e) => e.percent), events.map((e) => e.percent).sort((a, b) => a - b), 'progress never goes backwards')
+  assert.equal(events.at(-1).percent, 100)
+  step(`live progress: ${events.length} events across ${new Set(events.map((e) => e.stage)).size} stages`)
   const unique = Number((await page.textContent('[data-testid="unique-count"]')).replace(/,/g, ''))
   const truth = readFileSync(join(sample, 'ground_truth.csv'), 'utf8').trim().split('\n').length - 1
   assert.ok(Math.abs(unique - truth) / truth <= 0.01, `headcount ${unique} vs truth ${truth}`)

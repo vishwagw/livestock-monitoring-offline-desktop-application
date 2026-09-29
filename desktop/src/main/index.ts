@@ -1,29 +1,32 @@
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { app, BrowserWindow, Menu, protocol, session, shell, type MenuItemConstructorOptions } from 'electron'
 
 import type { TileInfo } from '@shared/types'
+import { APP_INDEX_URL, APP_SCHEME, isAppUrl, serveApp } from './appProtocol'
 import { registerIpc } from './ipc'
 import { SettingsStore } from './settings'
 import { parseTileUrl, readTile, TILE_SCHEME } from './tiles'
 
 const isDev = !app.isPackaged && Boolean(process.env.ELECTRON_RENDERER_URL)
 const devServerUrl = isDev ? new URL(process.env.ELECTRON_RENDERER_URL!) : null
-const rendererIndex = join(__dirname, '../renderer/index.html')
-const rendererIndexUrl = pathToFileURL(rendererIndex).href
+const rendererDir = join(__dirname, '../renderer')
 
-// The Python engine ships next to the app when packaged; in development it is
-// imported straight from the repository's src/ folder.
+// In development the engine runs from the repository's src/ folder with the
+// local Python. Packaged builds use only the frozen binary below.
 const repoRoot = app.isPackaged ? null : resolve(app.getAppPath(), '..')
-const engineSrc = app.isPackaged
+const engineSrc =
+  repoRoot && existsSync(join(repoRoot, 'src', 'livestock_engine')) ? join(repoRoot, 'src') : null
+
+// Packaged builds carry the frozen engine (PyInstaller one-folder bundle).
+// In development it may exist after `python packaging/build_engine.py`.
+const bundledEngineDir = app.isPackaged
   ? join(process.resourcesPath, 'engine')
-  : existsSync(join(repoRoot!, 'src', 'livestock_engine'))
-    ? join(repoRoot!, 'src')
-    : null
+  : join(app.getAppPath(), 'resources', 'engine')
 
 protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: TILE_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ])
 
@@ -42,11 +45,11 @@ function isTrustedUrl(url: string): boolean {
       return false
     }
   }
-  return url.split(/[?#]/)[0] === rendererIndexUrl
+  return isAppUrl(url)
 }
 
 function isAllowedRequest(url: string): boolean {
-  if (/^(file|tiles|data|blob|devtools):/i.test(url)) return true
+  if (/^(app|tiles|data|blob|devtools):/i.test(url)) return true
   if (devServerUrl) {
     try {
       const u = new URL(url)
@@ -81,7 +84,7 @@ function createWindow(): void {
     mainWindow = null
   })
   if (devServerUrl) void mainWindow.loadURL(devServerUrl.href)
-  else void mainWindow.loadFile(rendererIndex)
+  else void mainWindow.loadURL(APP_INDEX_URL)
 }
 
 function buildMenu(): void {
@@ -134,6 +137,7 @@ app.whenReady().then(async () => {
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'))
   tileCacheDir = (await settings.load()).tileCacheDir
 
+  protocol.handle(APP_SCHEME, (request) => serveApp(rendererDir, request))
   protocol.handle(TILE_SCHEME, async (request) => {
     const coord = parseTileUrl(request.url)
     if (!coord || !tileCacheDir) return new Response(null, { status: 404 })
@@ -148,6 +152,8 @@ app.whenReady().then(async () => {
     settings,
     userData: app.getPath('userData'),
     engineSrc,
+    bundledEngineDir,
+    packaged: app.isPackaged,
     repoRoot,
     isTrustedUrl,
     onTileCacheChanged: (info: TileInfo) => {

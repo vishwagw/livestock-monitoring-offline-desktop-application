@@ -14,6 +14,9 @@ The repository contains:
   drag-and-drop of DJI `.SRT` / telemetry CSVs and AI bounding-box logs, and
   an offline map with green distinct animals and red removed duplicates.
   See [`desktop/README.md`](desktop/README.md).
+* **Phase 3 – standalone installers**: the engine is frozen with PyInstaller
+  and shipped inside the app, with a live processing dashboard. Installers
+  are `.exe` / `.dmg` / AppImage / `.deb` and need no Python, Node.js or network.
 
 ![Desktop app: 1,195 raw detections from the sample flight collapse to a headcount of 150](docs/desktop-app.png)
 
@@ -35,6 +38,31 @@ cd desktop && npm install && npm run dev
 # then drop examples/sample-flight/flight.SRT and detections.csv into the app
 ```
 
+## Phase 3 at a glance
+
+| Sprint | Deliverable | Where |
+| --- | --- | --- |
+| 3.1 IPC pipeline binding | Files admitted in the UI become opaque ids; **Run** sends validated settings over IPC, and the main process launches the engine on the registered paths | `desktop/src/main/ipc.ts`, `engine.ts` |
+| 3.1 Real-time progress | The engine reports 6 weighted stages (read → match → georeference → cluster → align → report) with per-frame and per-pass updates and live counters, throttled to 10 Hz and never going backwards; the dashboard shows a stage checklist, overall %, elapsed time and time remaining | `livestock_engine/progress.py`, `ProgressPanel.tsx` |
+| 3.2 PyInstaller engine | One-folder frozen `livestock-engine` (about 180 MB, 70 MB compressed; starts in about 1.5 s). The build script checks that it runs **with no Python on PATH** and counts the sample flight correctly | `packaging/` |
+| 3.2 electron-builder | NSIS `.exe` (Windows x64), `.dmg` (macOS arm64 and x64), AppImage/`.deb` (Linux). Maximum compression, Electron fuses on, UI served from `app://`, no update feed | `desktop/electron-builder.config.cjs` |
+| Milestone 3 | A CI release matrix builds each installer on its own OS, then launches the packaged app offline without Python and checks the headcount | `.github/workflows/release.yml`, `desktop/e2e/release-check.mjs` |
+
+![Processing dashboard](docs/processing-dashboard.png)
+
+Build an installer for the machine you're on:
+
+```bash
+pip install -e . pyinstaller
+python packaging/build_engine.py        # frozen engine -> desktop/resources/engine (self-tested)
+cd desktop && npm ci
+npm run package:win | package:mac | package:linux
+npm run test:release                    # launch the packaged app offline, no Python, and count the sample
+```
+
+Push a `v*` tag, or run the **Release installers** workflow, to build all
+platforms and attach them to a draft GitHub release.
+
 ## Phase 1 at a glance
 
 | Sprint | Deliverable | Module |
@@ -43,6 +71,9 @@ cd desktop && npm install && npm run dev
 | 1.2 DBSCAN cluster optimisation | DBSCAN (`scikit-learn`, ε = 2.0 m) + structural resolution to one centroid per animal, keeping the highest-confidence class | `dedup.py` |
 | Accuracy hardening | Frame-to-consensus registration that cancels per-frame telemetry error | `registration.py` |
 | Milestone 1 | CLI with a simulator and a benchmark that verifies ≥ 99 % accuracy | `simulate.py`, `metrics.py`, `cli.py` |
+
+`livestock-engine self-check` imports every native dependency and runs PROJ
+and DBSCAN once. The desktop app uses it to validate an engine before running it.
 
 ## Install
 
@@ -259,10 +290,13 @@ Project layout:
 
 ```
 examples/sample-flight/   simulated raw logs (SRT, telemetry CSV, box CSV, truth)
+packaging/                PyInstaller spec + build_engine.py (freeze and self-test the engine)
+.github/workflows/        CI (tests, packaged E2E) and release (per-OS installers)
 desktop/                  Electron + React desktop app (Phase 2) – see desktop/README.md
 src/livestock_engine/
   ingest/          SRT / telemetry CSV / bounding-box parsers, telemetry join
   report.py        map-ready JSON report for the desktop app
+  progress.py      weighted, throttled stage progress (JSON events)
   camera.py        camera intrinsics (FOV → focal length) and frame pose
   geo.py           UTM zone selection, WGS84 ↔ UTM, grid convergence
   projection.py    rotation matrices, ray casting, inverse projection

@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -119,8 +120,13 @@ def register_frames(
     ground: GroundDetections,
     dedup_config: DedupConfig,
     config: RegistrationConfig | None = None,
+    on_step: Callable[[int, int, DedupResult], None] | None = None,
 ) -> tuple[GroundDetections, DedupResult, dict[str, FrameCorrection]]:
-    """Iteratively align frames and re-cluster. Returns corrected detections."""
+    """Iteratively align frames and re-cluster. Returns corrected detections.
+
+    ``on_step(step, iterations, result)`` is called after the initial
+    clustering (step 0) and after every alignment pass.
+    """
     config = config or RegistrationConfig()
     trim = config.trim_residual_m if config.trim_residual_m is not None else dedup_config.eps_m
 
@@ -133,8 +139,10 @@ def register_frames(
     current = ground
     result = deduplicate(current, dedup_config)
     corrections: dict[str, FrameCorrection] = {}
+    if on_step:
+        on_step(0, config.iterations, result)
 
-    for _ in range(config.iterations):
+    for step in range(1, config.iterations + 1):
         assign = result.assignment
         n_clusters = result.n_unique
         valid = assign >= 0
@@ -169,6 +177,8 @@ def register_frames(
             truth_ids=ground.truth_ids,
         )
         result = deduplicate(current, dedup_config)
+        if on_step:
+            on_step(step, config.iterations, result)
 
     # Report the cumulative correction from raw projection to final position.
     for frame_id, idx in frame_index.items():
