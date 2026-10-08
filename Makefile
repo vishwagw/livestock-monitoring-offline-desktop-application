@@ -15,7 +15,7 @@ test: ## Engine tests
 	$(PY) -m pytest
 
 lint: ## Static checks
-	$(PY) -m pyflakes src tests packaging
+	$(PY) -m pyflakes src tests packaging demo
 	cd desktop && $(NPM) run typecheck
 
 benchmark: ## Accuracy gate on all simulated profiles

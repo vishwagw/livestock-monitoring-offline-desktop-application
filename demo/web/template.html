@@ -1,0 +1,679 @@
+<title>Livestock Counter Field Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one-column field report: masthead, live survey console (map + readouts), processing steps, operator fit, accuracy evidence. */
+:root {
+  --ground: #f1f4f0;
+  --panel: #ffffff;
+  --ink: #17211b;
+  --muted: #5a685f;
+  --line: #d3dcd3;
+  --map: #e5ebe1;
+  --grid: rgba(23, 33, 27, 0.07);
+  --footprint: rgba(47, 111, 176, 0.06);
+  --flight: #2f6fb0;
+  --raw: #cf3a2f;
+  --true: #1d8f4f;
+  --link: #c98a00;
+  --accent: #b9561a;
+  --accent-ink: #ffffff;
+  --display: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0f1411; --panel: #161d18; --ink: #e3ebe5; --muted: #94a499; --line: #2a352d;
+    --map: #1a221c; --grid: rgba(227, 235, 229, 0.06); --footprint: rgba(111, 166, 224, 0.07);
+    --flight: #6fa6e0; --raw: #f0695e; --true: #48c47c; --link: #f0bd3f; --accent: #e8893f; --accent-ink: #1a0f06;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0f1411; --panel: #161d18; --ink: #e3ebe5; --muted: #94a499; --line: #2a352d;
+  --map: #1a221c; --grid: rgba(227, 235, 229, 0.06); --footprint: rgba(111, 166, 224, 0.07);
+  --flight: #6fa6e0; --raw: #f0695e; --true: #48c47c; --link: #f0bd3f; --accent: #e8893f; --accent-ink: #1a0f06;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 1rem/1.55 var(--body);
+  padding-inline: 16px;
+  padding-block: 0 48px;
+}
+.wrap { max-width: 1180px; margin-inline: auto; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; line-height: 1.05; text-wrap: balance; margin: 0; letter-spacing: 0.005em; }
+h1 { font-size: clamp(2.1rem, 4.6vw, 3.4rem); max-width: 22ch; }
+h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); }
+h3 { font-size: 1.3rem; }
+p { margin: 0; }
+.lede { font-size: 1.15rem; color: var(--muted); max-width: 62ch; }
+.eyebrow { font: 600 0.75rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Masthead */
+.mast { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-block: 20px 0; }
+.brand { display: flex; align-items: center; gap: 10px; font: 700 1.35rem/1 var(--display); letter-spacing: 0.02em; }
+.brand svg { color: var(--true); }
+.tag { font: 600 0.72rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; }
+
+.intro { display: grid; gap: 16px; }
+
+/* Console */
+.console { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: grid; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; border-bottom: 1px solid var(--line); }
+.tab { border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--ground); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+.tab:hover { color: var(--ink); }
+.console-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+@media (max-width: 860px) { .console-body { grid-template-columns: minmax(0, 1fr); } }
+.stage { position: relative; min-width: 0; background: var(--map); border-right: 1px solid var(--line); }
+@media (max-width: 860px) { .stage { border-right: 0; border-bottom: 1px solid var(--line); } }
+canvas#map { display: block; width: 100%; height: clamp(320px, 58vh, 560px); touch-action: none; cursor: grab; }
+canvas#map.dragging { cursor: grabbing; }
+.zoom { position: absolute; top: 12px; left: 12px; display: grid; gap: 4px; }
+.zoom button { width: 34px; height: 34px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; cursor: pointer; font: 600 1rem/1 var(--mono); }
+.legend { position: absolute; right: 12px; top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; font-size: 0.82rem; }
+.legend span { display: flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.raw { background: var(--raw); }
+.dot.true { background: var(--true); box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 2.5px var(--true); }
+.swatch-fp { width: 12px; height: 10px; border: 1.5px solid var(--flight); background: var(--footprint); display: inline-block; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 0.82rem; box-shadow: 0 6px 20px rgba(0,0,0,0.12); max-width: 260px; }
+.scale { position: absolute; left: 12px; bottom: 12px; font: 600 0.72rem/1 var(--mono); color: var(--muted); }
+.scale i { display: block; height: 6px; border: 1.5px solid var(--muted); border-top: 0; margin-bottom: 4px; }
+
+.side { display: grid; align-content: start; gap: 18px; padding: 18px; min-width: 0; }
+.blurb { color: var(--muted); font-size: 0.95rem; }
+.controls { display: grid; gap: 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--panel); padding: 9px 14px; border-radius: 9px; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+input[type="range"] { width: 100%; accent-color: var(--flight); }
+.range-label { display: flex; justify-content: space-between; font: 0.78rem/1 var(--mono); color: var(--muted); }
+
+.readout { display: grid; gap: 4px; padding-top: 14px; border-top: 1px solid var(--line); }
+.readout .big { font: 700 2.9rem/1 var(--display); font-variant-numeric: tabular-nums; }
+.readout.raw .big { color: var(--raw); }
+.readout.true .big { color: var(--true); }
+.readout .note { font-size: 0.86rem; color: var(--muted); }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.85rem; margin: 6px 0 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-family: var(--mono); font-size: 0.8rem; text-align: right; }
+
+/* Steps */
+.steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; list-style: none; padding: 0; margin: 0; counter-reset: step; }
+@media (max-width: 960px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .steps { grid-template-columns: minmax(0, 1fr); } }
+.steps li { counter-increment: step; display: grid; gap: 6px; align-content: start; padding-top: 12px; border-top: 2px solid var(--ink); min-width: 0; }
+.steps li::before { content: counter(step, decimal-leading-zero); font: 600 0.78rem/1 var(--mono); color: var(--accent); }
+.steps p { color: var(--muted); font-size: 0.93rem; }
+.section-head { display: grid; gap: 10px; margin-bottom: 22px; }
+
+/* Operator fit */
+.fit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+@media (max-width: 760px) { .fit { grid-template-columns: minmax(0, 1fr); } }
+.fit > div { padding: 22px; display: grid; gap: 10px; align-content: start; min-width: 0; border-bottom: 1px solid var(--line); }
+.fit > div:nth-child(odd) { border-right: 1px solid var(--line); }
+@media (max-width: 760px) { .fit > div:nth-child(odd) { border-right: 0; } }
+.fit > div:nth-last-child(-n + 2) { border-bottom: 0; }
+@media (max-width: 760px) { .fit > div:nth-last-child(2) { border-bottom: 1px solid var(--line); } }
+.fit ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--muted); }
+.fit code, .mono { font-family: var(--mono); font-size: 0.85em; color: var(--ink); }
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; font-size: 0.93rem; min-width: 560px; }
+th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; font: 600 0.72rem/1 var(--mono); padding: 4px 8px; border-radius: 999px; background: color-mix(in srgb, var(--true) 14%, transparent); color: var(--true); }
+.small { font-size: 0.86rem; color: var(--muted); max-width: 70ch; }
+.split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+.cta { border-top: 2px solid var(--ink); padding-top: 22px; display: grid; gap: 10px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="13" cy="13" r="4" fill="currentColor"/></svg>
+      Livestock Counter
+    </div>
+    <span class="tag" id="version-tag">Field demo · simulated surveys</span>
+  </header>
+
+  <section class="intro">
+    <p class="eyebrow">For drone survey operators</p>
+    <h1>Overlapping flight lines photograph every animal 5–10 times. Livestock Counter counts it once.</h1>
+    <p class="lede">Drop in the DJI flight log and your detector's bounding boxes. Livestock Counter places every detection on the ground, works out which ones are the same animal, and returns one georeferenced point per head. It runs entirely offline on a field laptop.</p>
+  </section>
+
+  <section class="console" aria-label="Interactive survey demo">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="console-body">
+      <div class="stage" id="stage">
+        <canvas id="map" aria-label="Survey map: raw sightings and unique animals"></canvas>
+        <div class="zoom">
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <button type="button" id="zoom-fit" aria-label="Fit survey">⤢</button>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span><i class="dot raw"></i>AI detection (sighting)</span>
+          <span><i class="dot true"></i>Counted animal</span>
+          <span><i class="swatch-fp"></i>Image footprint</span>
+        </div>
+        <div class="scale" aria-hidden="true"><i id="scale-bar"></i><span id="scale-text">50 m</span></div>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+
+      <div class="side">
+        <p class="blurb" id="blurb"></p>
+        <div class="controls">
+          <div class="row">
+            <button type="button" class="btn" id="play">▶ Fly the survey</button>
+            <button type="button" class="btn primary" id="dedup">De-duplicate</button>
+            <button type="button" class="btn" id="reset">Reset</button>
+          </div>
+          <label for="frames" class="range-label"><span>Images captured</span><span class="num" id="frames-text"></span></label>
+          <input type="range" id="frames" min="0" max="1" value="1">
+        </div>
+
+        <div class="readout raw">
+          <span class="eyebrow">Naive count · every detection</span>
+          <span class="big" id="naive">0</span>
+          <span class="note" id="naive-note"></span>
+        </div>
+        <div class="readout true">
+          <span class="eyebrow">Livestock Counter headcount</span>
+          <span class="big" id="unique">—</span>
+          <span class="note" id="unique-note">Press De-duplicate to merge repeat sightings.</span>
+          <dl class="facts" id="facts" hidden></dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">What happens to a flight</p>
+      <h2>From flight log to headcount in five steps</h2>
+    </div>
+    <ol class="steps">
+      <li><h3>Ingest</h3><p>Reads DJI <span class="mono">.SRT</span> or telemetry CSV, plus boxes from YOLO, COCO, CSV or JSON. Each box is matched to its image by file name, frame number or timestamp.</p></li>
+      <li><h3>Georeference</h3><p>Casts a ray through every box using altitude, gimbal pitch and roll, heading and the lens FOV, and lands it on the ground in local UTM coordinates.</p></li>
+      <li><h3>Align</h3><p>Corrects each image's GPS and compass drift against its overlapping neighbours. In packed yards, images are pre-aligned before any clustering.</p></li>
+      <li><h3>Cluster</h3><p>DBSCAN with a 2 m body envelope, tightened automatically in dense groups. Two boxes in the same image are never merged into one animal.</p></li>
+      <li><h3>Deliver</h3><p>One point per animal with class and confidence, as CSV, GeoJSON and a map report. An audit trail links every merged detection back to its image.</p></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Fits your existing workflow</p>
+      <h2>Works with the files you already produce</h2>
+    </div>
+    <div class="fit">
+      <div>
+        <h3>Inputs</h3>
+        <ul>
+          <li>DJI <code>.SRT</code> video logs (Mavic 3, Air, Mini, Phantom 4, Mavic Pro styles)</li>
+          <li>Per-photo telemetry or flight-log CSVs (e.g. AirData), with units in feet or ms handled automatically</li>
+          <li>Detector output: YOLO <code>.txt</code>, COCO JSON, CSV or JSON boxes, pixel or normalised</li>
+          <li>Several flights at once, plus video frames or still photos</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Deliverables</h3>
+        <ul>
+          <li>Headcount per class, with a confidence and a class-conflict flag per animal</li>
+          <li>CSV and GeoJSON points for the client's GIS</li>
+          <li>Per-detection audit: raw position, corrected position, assigned animal</li>
+          <li><code>validate</code> command to score results against a gate or yard count</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Speed</h3>
+        <ul>
+          <li class="num">55,000 detections in 4.7 s</li>
+          <li class="num">110,000 detections in 10.3 s</li>
+          <li class="num">221,000 detections in 21 s: linear scaling, full raw-log path</li>
+          <li>Live progress by stage, with an estimate of time remaining</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Offline and deployable</h3>
+        <ul>
+          <li>Installers for Windows, macOS and Linux, with the engine bundled: no Python or internet needed</li>
+          <li>No data leaves the laptop; network access is blocked by design</li>
+          <li>Offline basemap from a local tile cache</li>
+          <li>CLI, Python API and JSON Schemas for automated pipelines</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="split">
+    <div>
+      <div class="section-head">
+        <p class="eyebrow">Accuracy evidence</p>
+        <h2>Within 1% of the true count across every scenario tested</h2>
+      </div>
+      <p class="small">Ten complete simulated surveys per scenario, scored against the simulator's ground truth. The surveys use realistic DJI camera geometry, per-image GPS, compass, altitude and gimbal noise, missed detections and class errors. Validate on your own flights with a gate count before production use.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Scenario</th><th class="n">Sightings → animals</th><th class="n">Count accuracy</th></tr></thead>
+        <tbody>
+          <tr><td>Cattle, nadir 60 m</td><td class="n">11,842 → 1,500</td><td class="n"><span class="pill">100.00%</span></td></tr>
+          <tr><td>Oblique camera, −75°</td><td class="n">13,622 → 1,500</td><td class="n"><span class="pill">100.00%</span></td></tr>
+          <tr><td>Tight cattle herds</td><td class="n">19,649 → 2,500</td><td class="n"><span class="pill">100.00%</span></td></tr>
+          <tr><td>2× telemetry noise</td><td class="n">11,283 → 1,502</td><td class="n"><span class="pill">99.87%</span></td></tr>
+          <tr><td>Sheep yards, 0.9 m apart</td><td class="n">34,834 → 4,805</td><td class="n"><span class="pill">99.90%</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="cta">
+    <h2>See it on your own flights</h2>
+    <p class="lede">Bring three past surveys with a known gate or yard count: the flight logs and your detector's output. We'll process them offline and score the result against your count.</p>
+  </section>
+</div>
+
+<script id="demo-data" type="application/json">/*__DEMO_DATA__*/null</script>
+<script>
+(() => {
+  'use strict'
+  const DATA = JSON.parse(document.getElementById('demo-data').textContent)
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const fmt = (n) => Math.round(n).toLocaleString('en-US')
+  const $ = (id) => document.getElementById(id)
+  const canvas = $('map')
+  const ctx = canvas.getContext('2d')
+  const tip = $('tip')
+
+  $('version-tag').textContent = `Field demo · simulated surveys · engine ${DATA.engineVersion}`
+
+  let colors = {}
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement)
+    for (const k of ['map', 'grid', 'footprint', 'flight', 'raw', 'true', 'link', 'panel', 'ink', 'muted', 'accent']) {
+      colors[k] = cs.getPropertyValue('--' + k).trim()
+    }
+  }
+  readColors()
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readColors(); draw() })
+  new MutationObserver(() => { readColors(); draw() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+
+  // ---------- State ----------
+  let sc = null              // current scenario
+  let shown = 0              // images captured (frames flown)
+  let phase = 'raw'          // 'raw' | 'merging' | 'merged'
+  let mergeT = 0             // 0..1 during merging
+  let playing = false
+  let hover = null           // { kind, index }
+  const view = { scale: 1, cx: 0, cy: 0 } // pixels per metre, centre in metres
+  let detEnd = []            // detEnd[k] = number of detections in frames < k
+
+  function prepare(s) {
+    // Detections are sorted by frame index; precompute how many belong to the first k images.
+    detEnd = new Int32Array(s.frames.length + 1)
+    let j = 0
+    for (let k = 0; k <= s.frames.length; k++) {
+      while (j < s.dets.length && s.dets[j][3] < k) j++
+      detEnd[k] = j
+    }
+    // Average number of images covering a point: scales the footprint tint so
+    // dense overlap reads as a light wash instead of an opaque fill.
+    let area = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const f of s.frames) {
+      let a2 = 0
+      for (let c = 0; c < 4; c++) {
+        const x1 = f[2 + 2 * c], y1 = f[3 + 2 * c], x2 = f[2 + 2 * ((c + 1) % 4)], y2 = f[3 + 2 * ((c + 1) % 4)]
+        a2 += x1 * y2 - x2 * y1
+        minX = Math.min(minX, x1); maxX = Math.max(maxX, x1); minY = Math.min(minY, y1); maxY = Math.max(maxY, y1)
+      }
+      area += Math.abs(a2) / 2
+    }
+    const overlap = Math.max(1, area / Math.max(1, (maxX - minX) * (maxY - minY)))
+    s.footprintAlpha = Math.min(0.5, 2.2 / overlap)
+    s.members = s.animals.map(() => [])
+    s.dets.forEach((d, i) => { if (d[2] >= 0) s.members[d[2]].push(i) })
+  }
+
+  function selectScenario(id) {
+    sc = DATA.scenarios.find((s) => s.id === id)
+    if (!sc.members) prepare(sc)
+    playing = false
+    shown = sc.frames.length
+    phase = 'raw'
+    mergeT = 0
+    $('blurb').textContent = sc.blurb
+    $('frames').max = sc.frames.length
+    $('frames').value = shown
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.id === id)))
+    try { localStorage.setItem('lc-demo-scenario', id) } catch (e) { /* storage optional */ }
+    fit()
+    update()
+  }
+
+  // ---------- Geometry ----------
+  function size() {
+    const r = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(r.width * dpr)
+    canvas.height = Math.round(r.height * dpr)
+    return { w: r.width, h: r.height, dpr }
+  }
+  function fit() {
+    const r = canvas.getBoundingClientRect()
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const a of sc.animals) { minX = Math.min(minX, a[0]); maxX = Math.max(maxX, a[0]); minY = Math.min(minY, a[1]); maxY = Math.max(maxY, a[1]) }
+    const pad = 0.12
+    const w = (maxX - minX) || 10, h = (maxY - minY) || 10
+    view.scale = Math.min(r.width / (w * (1 + 2 * pad)), r.height / (h * (1 + 2 * pad)))
+    view.cx = (minX + maxX) / 2
+    view.cy = (minY + maxY) / 2
+  }
+  const toX = (x, w) => w / 2 + (x - view.cx) * view.scale
+  const toY = (y, h) => h / 2 - (y - view.cy) * view.scale
+
+  // ---------- Drawing ----------
+  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+  function draw() {
+    if (!sc) return
+    const { w, h, dpr } = size()
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.fillStyle = colors.map
+    ctx.fillRect(0, 0, w, h)
+
+    // Metric grid (spacing adapts to zoom).
+    const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+    const gridM = steps.find((s) => s * view.scale >= 70) || 1000
+    ctx.strokeStyle = colors.grid
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    const x0 = view.cx - w / 2 / view.scale, x1 = view.cx + w / 2 / view.scale
+    const y0 = view.cy - h / 2 / view.scale, y1 = view.cy + h / 2 / view.scale
+    for (let x = Math.floor(x0 / gridM) * gridM; x <= x1; x += gridM) { const px = Math.round(toX(x, w)) + 0.5; ctx.moveTo(px, 0); ctx.lineTo(px, h) }
+    for (let y = Math.floor(y0 / gridM) * gridM; y <= y1; y += gridM) { const py = Math.round(toY(y, h)) + 0.5; ctx.moveTo(0, py); ctx.lineTo(w, py) }
+    ctx.stroke()
+    const barM = steps.find((s) => s * view.scale >= 60) || 1000
+    $('scale-bar').style.width = barM * view.scale + 'px'
+    $('scale-text').textContent = barM >= 1000 ? barM / 1000 + ' km' : barM + ' m'
+
+    // Image footprints flown so far: overlap shows as darker ground.
+    ctx.fillStyle = colors.footprint
+    ctx.globalAlpha = sc.footprintAlpha
+    for (let k = 0; k < shown; k++) {
+      const f = sc.frames[k]
+      ctx.beginPath()
+      ctx.moveTo(toX(f[2], w), toY(f[3], h))
+      for (let c = 1; c < 4; c++) ctx.lineTo(toX(f[2 + 2 * c], w), toY(f[3 + 2 * c], h))
+      ctx.closePath()
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+    // Flight path.
+    if (shown > 1) {
+      ctx.strokeStyle = colors.flight
+      ctx.globalAlpha = 0.55
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 5])
+      ctx.beginPath()
+      for (let k = 0; k < shown; k++) { const f = sc.frames[k]; k ? ctx.lineTo(toX(f[0], w), toY(f[1], h)) : ctx.moveTo(toX(f[0], w), toY(f[1], h)) }
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.globalAlpha = 1
+    }
+    // Current image while flying.
+    if (playing && shown > 0) {
+      const f = sc.frames[shown - 1]
+      ctx.strokeStyle = colors.flight
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(toX(f[2], w), toY(f[3], h))
+      for (let c = 1; c < 4; c++) ctx.lineTo(toX(f[2 + 2 * c], w), toY(f[3 + 2 * c], h))
+      ctx.closePath()
+      ctx.stroke()
+      ctx.fillStyle = colors.flight
+      ctx.beginPath(); ctx.arc(toX(f[0], w), toY(f[1], h), 5, 0, Math.PI * 2); ctx.fill()
+    }
+
+    const rDet = Math.max(1.6, Math.min(4.5, 0.35 * view.scale))
+    const rAni = Math.max(2.6, Math.min(7, 0.55 * view.scale))
+    const n = detEnd[shown]
+    const t = phase === 'merging' ? ease(mergeT) : phase === 'merged' ? 1 : 0
+
+    // Hover links: every sighting of the hovered animal.
+    const linkAnimal = hover ? (hover.kind === 'animal' ? hover.index : sc.dets[hover.index][2]) : -1
+    if (linkAnimal >= 0) {
+      const a = sc.animals[linkAnimal]
+      ctx.strokeStyle = colors.link
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      for (const i of sc.members[linkAnimal]) {
+        if (i >= n) continue
+        const d = sc.dets[i]
+        ctx.moveTo(toX(a[0], w), toY(a[1], h)); ctx.lineTo(toX(d[0], w), toY(d[1], h))
+      }
+      ctx.stroke()
+    }
+
+    // Sightings: red at their raw positions, gliding onto their animal while merging.
+    if (t < 1) {
+      ctx.fillStyle = colors.raw
+      ctx.globalAlpha = 0.78 * (1 - t * 0.85)
+      for (let i = 0; i < n; i++) {
+        const d = sc.dets[i]
+        const a = d[2] >= 0 ? sc.animals[d[2]] : null
+        const x = a ? d[0] + (a[0] - d[0]) * t : d[0]
+        const y = a ? d[1] + (a[1] - d[1]) * t : d[1]
+        const px = toX(x, w), py = toY(y, h)
+        if (px < -5 || py < -5 || px > w + 5 || py > h + 5) continue
+        ctx.beginPath(); ctx.arc(px, py, rDet, 0, Math.PI * 2); ctx.fill()
+      }
+      ctx.globalAlpha = 1
+    }
+    // Animals appear as the merge completes.
+    if (t > 0) {
+      ctx.globalAlpha = Math.min(1, t * 1.4)
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = colors.panel
+      ctx.fillStyle = colors.true
+      for (const a of sc.animals) {
+        const px = toX(a[0], w), py = toY(a[1], h)
+        if (px < -8 || py < -8 || px > w + 8 || py > h + 8) continue
+        ctx.beginPath(); ctx.arc(px, py, rAni, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+      }
+      ctx.globalAlpha = 1
+    }
+    if (linkAnimal >= 0 && t === 1) {
+      const a = sc.animals[linkAnimal]
+      ctx.strokeStyle = colors.link
+      ctx.lineWidth = 2.5
+      ctx.beginPath(); ctx.arc(toX(a[0], w), toY(a[1], h), rAni + 5, 0, Math.PI * 2); ctx.stroke()
+    }
+  }
+
+  // ---------- Readouts ----------
+  function update() {
+    const n = detEnd[shown]
+    const st = sc.stats
+    $('frames-text').textContent = `${fmt(shown)} / ${fmt(sc.frames.length)}`
+    $('naive').textContent = fmt(n)
+    const seen = new Set()
+    for (let i = 0; i < n; i++) seen.add(sc.dets[i][2])
+    $('naive-note').textContent = shown === 0
+      ? 'Fly the survey to collect detections.'
+      : `${fmt(n)} boxes from the detector across ${fmt(shown)} images. Each animal so far appears in ${(n / Math.max(1, seen.size)).toFixed(1)} of them on average.`
+    const done = phase === 'merged' || phase === 'merging'
+    $('dedup').disabled = shown === 0 || done
+    if (done) {
+      const shownUnique = phase === 'merging' ? Math.round(n + (seen.size - n) * ease(mergeT)) : seen.size
+      $('unique').textContent = fmt(shownUnique)
+      const complete = shown === sc.frames.length
+      $('unique-note').textContent = complete
+        ? `${fmt(st.unique)} ${st.species} from ${fmt(st.raw)} sightings: ${Math.round((1 - st.unique / st.raw) * 100)}% were repeat views of the same animal. Hover an animal to see its sightings.`
+        : `Partial flight: ${fmt(seen.size)} animals in the ${fmt(shown)} images flown so far.`
+      const facts = [
+        ['True count (simulation)', fmt(st.truth)],
+        ['Count accuracy', (st.accuracy * 100).toFixed(2) + '%'],
+        ['Mean position error', st.meanErrorM.toFixed(2) + ' m'],
+        ['Drift corrected per image', (st.alignShiftM ?? 0).toFixed(2) + ' m avg'],
+        ['Clustering mode', st.mode === 'dense' ? `dense groups (ε ${st.epsM} m)` : `standard (ε ${st.epsM} m)`],
+        ['Processing time', st.seconds.toFixed(2) + ' s']
+      ]
+      $('facts').innerHTML = facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+      $('facts').hidden = !complete
+    } else {
+      $('unique').textContent = '—'
+      $('unique-note').textContent = 'Press De-duplicate to merge repeat sightings.'
+      $('facts').hidden = true
+    }
+    $('play').textContent = playing ? '❚❚ Pause' : shown === sc.frames.length ? '▶ Replay the flight' : '▶ Fly the survey'
+    draw()
+  }
+
+  // ---------- Animation ----------
+  let raf = 0
+  function loop(ts, last) {
+    const dt = last ? Math.min(0.05, (ts - last) / 1000) : 0
+    let again = false
+    if (playing) {
+      const perSecond = sc.frames.length / 8 // whole survey in ~8 s
+      loop.acc = (loop.acc || 0) + perSecond * dt
+      const step = Math.floor(loop.acc)
+      if (step > 0) { loop.acc -= step; shown = Math.min(sc.frames.length, shown + step); $('frames').value = shown }
+      if (shown >= sc.frames.length) playing = false
+      again = playing
+    }
+    if (phase === 'merging') {
+      mergeT = Math.min(1, mergeT + dt / 1.6)
+      if (mergeT >= 1) phase = 'merged'
+      again = again || phase === 'merging'
+    }
+    update()
+    if (again) raf = requestAnimationFrame((t) => loop(t, ts))
+  }
+  function animate() { cancelAnimationFrame(raf); raf = requestAnimationFrame((t) => loop(t, 0)) }
+
+  $('play').addEventListener('click', () => {
+    if (playing) { playing = false; update(); return }
+    if (shown >= sc.frames.length) shown = 0
+    phase = 'raw'; mergeT = 0; hover = null
+    if (reduceMotion) { shown = sc.frames.length; $('frames').value = shown; update(); return }
+    playing = true
+    loop.acc = 0
+    animate()
+  })
+  $('dedup').addEventListener('click', () => {
+    playing = false
+    if (reduceMotion) { phase = 'merged'; mergeT = 1; update(); return }
+    phase = 'merging'; mergeT = 0
+    animate()
+  })
+  $('reset').addEventListener('click', () => { playing = false; shown = 0; phase = 'raw'; mergeT = 0; hover = null; $('frames').value = 0; fit(); update() })
+  $('frames').addEventListener('input', (e) => { playing = false; shown = Number(e.target.value); if (phase === 'merging') phase = 'merged'; update() })
+
+  // ---------- Pan, zoom, hover ----------
+  function zoomAt(factor, px, py) {
+    const r = canvas.getBoundingClientRect()
+    const mx = view.cx + (px - r.width / 2) / view.scale
+    const my = view.cy - (py - r.height / 2) / view.scale
+    view.scale = Math.max(0.05, Math.min(400, view.scale * factor))
+    view.cx = mx - (px - r.width / 2) / view.scale
+    view.cy = my + (py - r.height / 2) / view.scale
+    draw()
+  }
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); const r = canvas.getBoundingClientRect(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top) }, { passive: false })
+  $('zoom-in').addEventListener('click', () => { const r = canvas.getBoundingClientRect(); zoomAt(1.6, r.width / 2, r.height / 2) })
+  $('zoom-out').addEventListener('click', () => { const r = canvas.getBoundingClientRect(); zoomAt(1 / 1.6, r.width / 2, r.height / 2) })
+  $('zoom-fit').addEventListener('click', () => { fit(); draw() })
+
+  let drag = null
+  canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, cx: view.cx, cy: view.cy, moved: false }; canvas.setPointerCapture(e.pointerId) })
+  canvas.addEventListener('pointermove', (e) => {
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y
+      if (Math.abs(dx) + Math.abs(dy) > 3) { drag.moved = true; canvas.classList.add('dragging') }
+      view.cx = drag.cx - dx / view.scale
+      view.cy = drag.cy + dy / view.scale
+      tip.hidden = true
+      draw()
+      return
+    }
+    hoverAt(e)
+  })
+  const endDrag = () => { drag = null; canvas.classList.remove('dragging') }
+  canvas.addEventListener('pointerup', (e) => { const click = drag && !drag.moved; endDrag(); if (click) hoverAt(e) })
+  canvas.addEventListener('pointercancel', endDrag)
+  canvas.addEventListener('pointerleave', () => { if (!drag) { hover = null; tip.hidden = true; draw() } })
+
+  function hoverAt(e) {
+    const r = canvas.getBoundingClientRect()
+    const px = e.clientX - r.left, py = e.clientY - r.top
+    const mx = view.cx + (px - r.width / 2) / view.scale
+    const my = view.cy - (py - r.height / 2) / view.scale
+    const tol = 9 / view.scale
+    let best = null, bestD = tol * tol
+    if (phase === 'merged') {
+      sc.animals.forEach((a, i) => { const d = (a[0] - mx) ** 2 + (a[1] - my) ** 2; if (d < bestD) { bestD = d; best = { kind: 'animal', index: i } } })
+    } else if (phase === 'raw') {
+      const n = detEnd[shown]
+      for (let i = 0; i < n; i++) { const d0 = sc.dets[i]; const d = (d0[0] - mx) ** 2 + (d0[1] - my) ** 2; if (d < bestD) { bestD = d; best = { kind: 'det', index: i } } }
+    }
+    hover = best
+    if (best) {
+      if (best.kind === 'animal') {
+        const a = sc.animals[best.index]
+        const seen = sc.members[best.index].filter((i) => i < detEnd[shown]).length
+        tip.textContent = `${a[3]} · photographed ${seen}× · counted once (confidence ${Math.round(a[4] * 100)}%)`
+      } else {
+        const d = sc.dets[best.index]
+        const others = sc.members[d[2]].filter((i) => i < detEnd[shown]).length - 1
+        tip.textContent = `Detection in image ${d[3] + 1}. The same animal appears in ${others} other detection${others === 1 ? '' : 's'} (yellow lines).`
+      }
+      tip.hidden = false
+      const tw = tip.offsetWidth
+      tip.style.left = Math.min(r.width - tw - 8, px + 14) + 'px'
+      tip.style.top = Math.max(8, py - 40) + 'px'
+    } else tip.hidden = true
+    draw()
+  }
+
+  new ResizeObserver(() => draw()).observe(canvas)
+
+  // ---------- Tabs ----------
+  const tabs = $('tabs')
+  for (const s of DATA.scenarios) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'tab'
+    b.setAttribute('role', 'tab')
+    b.dataset.id = s.id
+    b.innerHTML = `${s.label} <span class="num" style="color:var(--muted);font-weight:400">· ${fmt(s.stats.truth)}</span>`
+    b.addEventListener('click', () => selectScenario(s.id))
+    tabs.appendChild(b)
+  }
+  let start = DATA.scenarios[0].id
+  try { const saved = localStorage.getItem('lc-demo-scenario'); if (DATA.scenarios.some((s) => s.id === saved)) start = saved } catch (e) { /* storage optional */ }
+  selectScenario(start)
+})()
+</script>

@@ -24,7 +24,7 @@ jobs:
         run: |
           pip install -r requirements-dev.txt
           pip install --no-deps -e .
-      - run: python -m pyflakes src tests packaging
+      - run: python -m pyflakes src tests packaging demo
       - run: pytest
       - name: Accuracy gate (incl. dense sheep yards)
         run: livestock-engine benchmark --runs 5 --profile standard --profile oblique --profile dense --profile harsh --profile sheep_pen
